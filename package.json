@@ -1,0 +1,28 @@
+{
+  "name": "hpr",
+  "version": "0.1.0",
+  "description": "Review a single GitHub PR in the terminal — threads, checks, replies, merge — and open its diff in hunk",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "hpr": "bin/hpr.mjs"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "start": "bun run src/cli.tsx"
+  },
+  "dependencies": {
+    "ink": "^5.1.0",
+    "ink-select-input": "^6.0.0",
+    "ink-text-input": "^6.0.0",
+    "react": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^18.3.12",
+    "bun-types": "^1.4.2",
+    "ink-testing-library": "^4.0.0",
+    "typescript": "^5.0.0"
+  }
+}
