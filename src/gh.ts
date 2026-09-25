@@ -175,7 +175,7 @@ export async function postReview(
   number: number,
   payload: Record<string, unknown>,
 ): Promise<void> {
-  const temporaryPath = join(tmpdir(), `hunk-gh-stacked-pr-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
+  const temporaryPath = join(tmpdir(), `gh-pry-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
   writeFileSync(temporaryPath, JSON.stringify(payload));
   try {
     await mustRun("gh", ["api", `repos/${repo}/pulls/${number}/reviews`, "--method", "POST", "--input", temporaryPath], { cwd });

@@ -37,7 +37,7 @@ function samplePr(): PrDetails {
 
 function ready(update: Partial<State> = {}): void {
   setState({
-    phase: "ready", repo: "chrismatix/hpr", number: 7, pr: samplePr(), stack: null,
+    phase: "ready", repo: "chrismatix/gh-pry", number: 7, pr: samplePr(), stack: null,
     tab: "conversation", hideResolved: true, overlay: null, pager: null, toast: null,
     selection: { conversation: 0, threads: 0, checks: 0 }, scroll: { conversation: 0, threads: 0, checks: 0 },
     viewport: { columns: 100, rows: 30 },

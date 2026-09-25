@@ -1,13 +1,21 @@
-# hpr
+# gh-pry
 
-Review a single GitHub PR from the terminal — conversation, review threads, and CI checks in one screen; reply, resolve, comment, review, and merge without leaving it; read failed CI logs in place; and open the diff in [hunk](https://hunk.dev) with one key.
+Pry open a single GitHub PR from the terminal — conversation, review threads, and CI checks in one screen; reply, resolve, comment, review, and merge without leaving it; read failed CI logs in place; and open the diff in [hunk](https://hunk.dev) with one key.
 
 ```bash
-hpr          # the current branch's PR
-hpr 123      # PR #123 in this repo
+gh pry          # the current branch's PR
+gh pry 123      # PR #123 in this repo
 ```
 
 Needs an authenticated [`gh`](https://cli.github.com) and, for the diff view, `hunk` on your PATH.
+
+## Install
+
+```bash
+gh extension install chrismatix/gh-pry
+```
+
+Runs as a `gh` extension, so `gh pry` works anywhere. The `gh-pry` executable also works on its own if you put it on your PATH.
 
 ## Screen
 

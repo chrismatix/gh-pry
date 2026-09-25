@@ -1,11 +1,11 @@
 {
-  "name": "hpr",
+  "name": "gh-pry",
   "version": "0.1.0",
-  "description": "Review a single GitHub PR in the terminal — threads, checks, replies, merge — and open its diff in hunk",
+  "description": "Pry open a single GitHub PR in the terminal — threads, checks, replies, merge, CI logs — and open its diff in hunk",
   "license": "MIT",
   "type": "module",
   "bin": {
-    "hpr": "bin/hpr.mjs"
+    "gh-pry": "gh-pry"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

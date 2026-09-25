@@ -25,7 +25,7 @@ export async function load(cwd: string, numberArg: number | null): Promise<void>
   setState({ repo });
   const number = numberArg ?? (await resolveBranchPr(cwd, repo));
   if (number === null) {
-    setState({ phase: "error", message: "no PR for the current branch — pass a number: hpr <number>", repo });
+    setState({ phase: "error", message: "no PR for the current branch — pass a number: gh pry <number>", repo });
     return;
   }
   setState({ number });
