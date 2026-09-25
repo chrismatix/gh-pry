@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { render } from "ink-testing-library";
 import { App } from "../src/app.tsx";
-import { parseRunLog, type PrDetails, type TimelineItem } from "../src/model.ts";
-import { findInPager, getState, moveSelection, openPager, scrollPager, setState, updatePager, type State } from "../src/store.ts";
+import { parseRunLog, type PrDetails, type StackInfo, type TimelineItem } from "../src/model.ts";
+import { findInPager, getState, moveSelection, openPager, scrollPager, setState, stackNeighbour, tabs, updatePager, type State } from "../src/store.ts";
 
 function samplePr(): PrDetails {
   return {
@@ -39,7 +39,7 @@ function ready(update: Partial<State> = {}): void {
   setState({
     phase: "ready", repo: "chrismatix/gh-pry", number: 7, pr: samplePr(), stack: null,
     tab: "conversation", hideResolved: true, overlay: null, pager: null, toast: null,
-    selection: { conversation: 0, threads: 0, checks: 0 }, scroll: { conversation: 0, threads: 0, checks: 0 },
+    selection: { conversation: 0, threads: 0, checks: 0, stack: 0 }, scroll: { conversation: 0, threads: 0, checks: 0, stack: 0 },
     viewport: { columns: 100, rows: 30 },
     ...update,
   });
@@ -96,6 +96,54 @@ describe("App", () => {
   test("error phase renders the message", () => {
     setState({ phase: "error", message: "no PR for the current branch", overlay: null, pager: null, toast: null });
     expect(frameOf()).toContain("no PR for the current branch");
+  });
+});
+
+function sampleStack(): StackInfo {
+  return {
+    tracked: true,
+    entries: [
+      { number: 5, title: "base helpers", headRefName: "feat/a", baseRefName: "main", reviewDecision: "APPROVED", checksState: "SUCCESS", isCurrent: false },
+      { number: 7, title: "Add relative-time helper", headRefName: "feat/x", baseRefName: "feat/a", reviewDecision: "CHANGES_REQUESTED", checksState: "PENDING", isCurrent: true },
+      { number: null, title: "", headRefName: "feat/c", baseRefName: null, reviewDecision: null, checksState: null, isCurrent: false },
+    ],
+  };
+}
+
+describe("Stack", () => {
+  test("the tab only exists when the PR sits in a chain", () => {
+    ready();
+    expect(tabs(getState())).toEqual(["conversation", "threads", "checks"]);
+    expect(frameOf()).not.toContain("Stack");
+    ready({ stack: sampleStack() });
+    expect(tabs(getState())).toEqual(["conversation", "threads", "checks", "stack"]);
+    expect(frameOf()).toContain("Stack 2/3");
+  });
+
+  test("lists the chain with the current entry marked", () => {
+    ready({ stack: sampleStack(), tab: "stack", selection: { conversation: 0, threads: 0, checks: 0, stack: 1 } });
+    const frame = frameOf();
+    expect(frame).toContain("┌ ✓ #5 base helpers  approved");
+    expect(frame).toContain("#7 Add relative-time helper  changes requested  ◂ here");
+    expect(frame).toContain("└ · feat/c (no PR)");
+    expect(frame).toContain("this is the PR you are reading");
+  });
+
+  test("previews a switch target and names branchless entries", () => {
+    ready({ stack: sampleStack(), tab: "stack", selection: { conversation: 0, threads: 0, checks: 0, stack: 0 } });
+    const frame = frameOf();
+    expect(frame).toContain("#5 base helpers");
+    expect(frame).toContain("feat/a → main");
+    expect(frame).toContain("tracked by gh stack");
+    expect(frame).toContain("enter switches to this PR");
+    ready({ stack: sampleStack(), tab: "stack", selection: { conversation: 0, threads: 0, checks: 0, stack: 2 } });
+    expect(frameOf()).toContain("no PR open for this branch yet");
+  });
+
+  test("stackNeighbour skips entries that have no PR and stops at the ends", () => {
+    ready({ stack: sampleStack() });
+    expect(stackNeighbour(getState(), -1)?.number).toBe(5);
+    expect(stackNeighbour(getState(), 1)).toBeNull();
   });
 });
 

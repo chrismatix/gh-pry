@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
-import type { LogLine, PrDetails, ReviewThread, StackInfo, TimelineItem } from "./model.ts";
+import type { LogLine, PrDetails, ReviewThread, StackEntry, StackInfo, TimelineItem } from "./model.ts";
 
-export type Tab = "conversation" | "threads" | "checks";
+export type Tab = "conversation" | "threads" | "checks" | "stack";
 
 export type Toast = { text: string; kind: "info" | "warning" | "error" };
 
@@ -49,8 +49,8 @@ let state: State = {
   pr: null,
   stack: null,
   tab: "conversation",
-  selection: { conversation: 0, threads: 0, checks: 0 },
-  scroll: { conversation: 0, threads: 0, checks: 0 },
+  selection: { conversation: 0, threads: 0, checks: 0, stack: 0 },
+  scroll: { conversation: 0, threads: 0, checks: 0, stack: 0 },
   hideResolved: true,
   overlay: null,
   pager: null,
@@ -103,11 +103,22 @@ export function visibleThreads(current: State): ReviewThread[] {
   return current.hideResolved ? current.pr.threads.filter((thread) => !thread.isResolved) : current.pr.threads;
 }
 
+export function stackEntries(current: State): StackEntry[] {
+  return current.stack?.entries ?? [];
+}
+
+/** The Stack tab only exists when this PR actually sits in a chain. */
+export function tabs(current: State): Tab[] {
+  const base: Tab[] = ["conversation", "threads", "checks"];
+  return stackEntries(current).length > 1 ? [...base, "stack"] : base;
+}
+
 export function tabLength(current: State): number {
   switch (current.tab) {
     case "conversation": return conversationItems(current).length;
     case "threads": return visibleThreads(current).length;
     case "checks": return current.pr?.checks.length ?? 0;
+    case "stack": return stackEntries(current).length;
   }
 }
 
@@ -140,7 +151,13 @@ export function moveSelection(delta: number | "first" | "last"): void {
 }
 
 export function setTab(tab: Tab): void {
-  setState({ tab });
+  if (tabs(state).includes(tab)) setState({ tab });
+}
+
+export function cycleTab(delta: 1 | -1): void {
+  const list = tabs(state);
+  const index = list.indexOf(state.tab);
+  setTab(list[(index + delta + list.length) % list.length]);
 }
 
 export function setViewport(columns: number, rows: number): void {
@@ -151,6 +168,21 @@ export function setViewport(columns: number, rows: number): void {
 export function activeThread(current: State) {
   const threads = visibleThreads(current);
   return threads[current.selection.threads] ?? null;
+}
+
+export function currentStackIndex(current: State): number {
+  return stackEntries(current).findIndex((entry) => entry.isCurrent);
+}
+
+/** The next stack entry that has a PR to open; null at the end of the chain. */
+export function stackNeighbour(current: State, delta: 1 | -1): StackEntry | null {
+  const entries = stackEntries(current);
+  const from = currentStackIndex(current);
+  if (from < 0) return null;
+  for (let index = from + delta; index >= 0 && index < entries.length; index += delta) {
+    if (entries[index].number !== null) return entries[index];
+  }
+  return null;
 }
 
 export function openPager(title: string, lines: LogLine[], loading = false): void {

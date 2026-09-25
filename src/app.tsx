@@ -7,6 +7,7 @@ import * as actions from "./actions.ts";
 import { requestExit } from "./control.ts";
 import {
   checkFailed,
+  formatCheckState,
   formatDecision,
   formatDuration,
   relativeTime,
@@ -15,11 +16,14 @@ import {
   type Check,
   type LogLine,
   type ReviewThread,
+  type StackEntry,
   type TimelineItem,
 } from "./model.ts";
 import {
   activeThread,
   conversationItems,
+  currentStackIndex,
+  cycleTab,
   findInPager,
   layout,
   moveSelection,
@@ -27,6 +31,9 @@ import {
   scrollPager,
   setState,
   setTab,
+  stackEntries,
+  stackNeighbour,
+  tabs,
   toast,
   updatePager,
   useStore,
@@ -86,17 +93,21 @@ function Header({ state }: { state: State }) {
   );
 }
 
+function tabLabel(state: State, tab: State["tab"]): string {
+  switch (tab) {
+    case "conversation": return `Conversation ${conversationItems(state).length}`;
+    case "threads": return `Threads ${visibleThreads(state).length}${state.hideResolved ? "" : " (all)"}`;
+    case "checks": return `Checks ${state.pr!.checks.length}`;
+    case "stack": return `Stack ${currentStackIndex(state) + 1}/${stackEntries(state).length}`;
+  }
+}
+
 function Tabs({ state }: { state: State }) {
-  const items: { id: State["tab"]; label: string }[] = [
-    { id: "conversation", label: `Conversation ${conversationItems(state).length}` },
-    { id: "threads", label: `Threads ${visibleThreads(state).length}${state.hideResolved ? "" : " (all)"}` },
-    { id: "checks", label: `Checks ${state.pr!.checks.length}` },
-  ];
   return (
     <Box>
-      {items.map((item) => (
-        <Text key={item.id} color={item.id === state.tab ? "cyan" : "gray"} bold={item.id === state.tab}>
-          {" "}{item.id === state.tab ? "▸ " : "  "}{item.label}{" "}
+      {tabs(state).map((tab) => (
+        <Text key={tab} color={tab === state.tab ? "cyan" : "gray"} bold={tab === state.tab}>
+          {" "}{tab === state.tab ? "▸ " : "  "}{tabLabel(state, tab)}{" "}
         </Text>
       ))}
     </Box>
@@ -151,6 +162,23 @@ function CheckRow({ check }: { check: Check }) {
   );
 }
 
+function StackRow({ entry, position, total }: { entry: StackEntry; position: number; total: number }) {
+  const connector = total === 1 ? "─" : position === 0 ? "┌" : position === total - 1 ? "└" : "├";
+  const checkGlyph = formatCheckState(entry.checksState);
+  const checkColor = entry.checksState === "SUCCESS" ? "green" : entry.checksState === "PENDING" ? "yellow" : entry.checksState === null ? "gray" : "red";
+  return (
+    <Text>
+      <Text color="magenta">{connector} </Text>
+      <Text color={checkColor}>{checkGlyph} </Text>
+      {entry.number === null
+        ? <Text color="gray">{entry.headRefName} (no PR)</Text>
+        : <Text bold={entry.isCurrent} color={entry.isCurrent ? "cyan" : undefined}>#{entry.number} {entry.title || entry.headRefName}</Text>}
+      {entry.reviewDecision ? <Text color={entry.reviewDecision === "APPROVED" ? "green" : entry.reviewDecision === "CHANGES_REQUESTED" ? "red" : "gray"}>  {formatDecision(entry.reviewDecision)}</Text> : null}
+      {entry.isCurrent ? <Text color="cyan" bold>  ◂ here</Text> : null}
+    </Text>
+  );
+}
+
 function List({ state }: { state: State }) {
   const { listRows } = layout(state);
   const selection = state.selection[state.tab];
@@ -163,6 +191,10 @@ function List({ state }: { state: State }) {
   } else if (state.tab === "threads") {
     rows = visibleThreads(state).map((thread) => <ThreadRow key={thread.id} thread={thread} />);
     empty = state.hideResolved ? "No unresolved threads (h shows resolved)" : "No review threads";
+  } else if (state.tab === "stack") {
+    const entries = stackEntries(state);
+    rows = entries.map((entry, index) => <StackRow key={index} entry={entry} position={index} total={entries.length} />);
+    empty = "Not part of a stack";
   } else {
     rows = state.pr!.checks.map((check, index) => <CheckRow key={index} check={check} />);
     empty = "No checks reported";
@@ -211,6 +243,21 @@ function detailLines(state: State, width: number): LogLine[] {
     }
     return lines;
   }
+  if (state.tab === "stack") {
+    const entry = stackEntries(state)[state.selection.stack];
+    if (!entry) return [];
+    const heading = entry.number === null ? entry.headRefName : `#${entry.number} ${entry.title || entry.headRefName}`;
+    return [
+      { text: heading, kind: "step" },
+      { text: `${entry.headRefName}${entry.baseRefName ? ` → ${entry.baseRefName}` : ""}`, kind: "text" },
+      { text: `${formatDecision(entry.reviewDecision)} · checks ${formatCheckState(entry.checksState)}${state.stack?.tracked ? " · tracked by gh stack" : ""}`, kind: "text" },
+      entry.isCurrent
+        ? { text: "this is the PR you are reading", kind: "dim" }
+        : entry.number === null
+          ? { text: "no PR open for this branch yet", kind: "dim" }
+          : { text: "enter switches to this PR · [ and ] move down and up the stack", kind: "dim" },
+    ];
+  }
   const check = state.pr!.checks[state.selection.checks];
   if (!check) return [];
   const { icon } = checkIcon(check);
@@ -248,11 +295,13 @@ function Footer({ state }: { state: State }) {
     ? "r reply · x resolve · h toggle resolved"
     : state.tab === "checks"
       ? "enter log · u rerun failed"
-      : "enter read · c comment";
+      : state.tab === "stack"
+        ? "enter switch · [ ] down/up the stack"
+        : "enter read · c comment";
   const toastColor = state.toast?.kind === "error" ? "red" : state.toast?.kind === "warning" ? "yellow" : "green";
   return (
     <Box flexDirection="column">
-      <Text color="gray" wrap="truncate">tab/1-3 switch · j/k move · {keys} · a review · m merge · d diff · R refresh · q quit</Text>
+      <Text color="gray" wrap="truncate">tab/1-{tabs(state).length} switch · j/k move · {keys} · a review · m merge · d diff · R refresh · q quit</Text>
       <Text wrap="truncate">
         {state.busy ? <Text color="yellow">working… </Text> : null}
         {state.toast ? <Text color={toastColor}>{state.toast.text}</Text> : <Text> </Text>}
@@ -403,10 +452,18 @@ export function App() {
     }
     if (state.phase !== "ready") return;
 
-    if (key.tab) { setTab(state.tab === "conversation" ? "threads" : state.tab === "threads" ? "checks" : "conversation"); return; }
+    if (key.tab) return cycleTab(key.shift ? -1 : 1);
     if (input === "1") return setTab("conversation");
     if (input === "2") return setTab("threads");
     if (input === "3") return setTab("checks");
+    if (input === "4") return setTab("stack");
+    if (input === "[" || input === "]") {
+      if (stackEntries(state).length < 2) { toast("this PR is not part of a stack", "warning"); return; }
+      const target = stackNeighbour(state, input === "]" ? 1 : -1);
+      if (!target || target.number === null) { toast(input === "]" ? "top of the stack" : "bottom of the stack", "warning"); return; }
+      void actions.switchToPr(target.number);
+      return;
+    }
     if (input === "j" || key.downArrow) return moveSelection(1);
     if (input === "k" || key.upArrow) return moveSelection(-1);
     if (input === "g") return moveSelection("first");
@@ -425,6 +482,14 @@ export function App() {
       if (state.tab === "checks") {
         const check = state.pr!.checks[state.selection.checks];
         if (check) void actions.openLog(check);
+        return;
+      }
+      if (state.tab === "stack") {
+        const entry = stackEntries(state)[state.selection.stack];
+        if (!entry) return;
+        if (entry.number === null) { toast(`no PR open for ${entry.headRefName}`, "warning"); return; }
+        if (entry.isCurrent) { toast("already reading this PR"); return; }
+        void actions.switchToPr(entry.number);
         return;
       }
       const lines = detailLines(state, state.viewport.columns);

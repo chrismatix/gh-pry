@@ -19,15 +19,20 @@ Runs as a `gh` extension, so `gh pry` works anywhere. The `gh-pry` executable al
 
 ## Screen
 
-Header (title, author, branches, review decision, checks, mergeability, unresolved count), three tabs, a list that scrolls to fit the terminal, a preview panel with the selected item in full, and a key hint / status line. The Conversation tab starts with the PR description.
+Header (title, author, branches, review decision, checks, mergeability, unresolved count), the tabs, a list that scrolls to fit the terminal, a preview panel with the selected item in full, and a key hint / status line. The Conversation tab starts with the PR description.
+
+## Stacks
+
+When the PR sits in a chain of PRs, a fourth **Stack** tab appears listing the whole chain trunk-first with each PR's checks and review decision. `enter` switches to the selected PR in place; `[` and `]` jump down and up the chain from any tab. The chain is derived from base-ref links between open PRs, and from `gh stack view` when that extension tracks the branches.
 
 ## Keys
 
 | Key | Action |
 | --- | --- |
-| `tab`, `1`/`2`/`3` | switch Conversation / Threads / Checks |
+| `tab`, `1`/`2`/`3`/`4` | switch Conversation / Threads / Checks / Stack |
+| `[` / `]` | switch to the PR below / above in the stack |
 | `j`/`k`, `g`/`G` | move selection (the preview follows) |
-| `enter` | open the selected comment or thread in the reader; on Checks, open the job log |
+| `enter` | open the selected comment or thread in the reader; on Checks, the job log; on Stack, switch PR |
 | `d` | open the diff in hunk (checked-out branch → merge-base diff, else `gh pr diff \| hunk patch`) |
 | `r` / `x` / `h` | reply to thread / resolve-unresolve / show-hide resolved |
 | `c` | comment on the PR conversation |

@@ -13,7 +13,7 @@ import {
   rerunFailed,
 } from "./gh.ts";
 import { allowedMergeMethods, checkFailed, checksArePending, parseRunLog, type Check } from "./model.ts";
-import { activeThread, getState, openPager, setState, toast, updatePager } from "./store.ts";
+import { activeThread, currentStackIndex, getState, moveSelection, openPager, setState, tabs, toast, updatePager } from "./store.ts";
 
 export async function load(cwd: string, numberArg: number | null): Promise<void> {
   setState({ phase: "loading", cwd, number: numberArg });
@@ -40,6 +40,26 @@ export async function refresh(cwd = getState().cwd, repo = getState().repo, numb
   } catch (error) {
     setState({ phase: "error", message: firstLine(error), repo, number });
   }
+}
+
+export function switchToPr(number: number): Promise<void> {
+  return withBusy(async () => {
+    const { repo, number: from } = getState();
+    if (!repo || number === from) return;
+    setState({
+      number,
+      selection: { conversation: 0, threads: 0, checks: 0, stack: 0 },
+      scroll: { conversation: 0, threads: 0, checks: 0, stack: 0 },
+    });
+    await refresh(getState().cwd, repo, number);
+    const state = getState();
+    if (state.phase !== "ready") return;
+    const index = currentStackIndex(state);
+    if (index >= 0) setState({ selection: { ...state.selection, stack: index } });
+    if (!tabs(getState()).includes(getState().tab)) setState({ tab: "conversation" });
+    moveSelection(0);
+    toast(`switched to #${number} ${state.pr?.title ?? ""}`.trim());
+  });
 }
 
 async function withBusy(work: () => Promise<void>): Promise<void> {
