@@ -23,11 +23,12 @@ export type Check = {
   startedAt: string | null;
   completedAt: string | null;
   runId: number | null;
+  jobId: number | null;
   workflow: string | null;
 };
 
 export type TimelineItem = {
-  kind: "comment" | "review" | "force-push" | "commit" | "merged" | "review-requested";
+  kind: "description" | "comment" | "review" | "force-push" | "commit" | "merged" | "review-requested";
   author: string;
   body: string | null;
   reviewState: string | null;
@@ -128,6 +129,7 @@ export function parseChecks(commitNodes: unknown): Check[] {
         startedAt: typeof context.startedAt === "string" ? context.startedAt : null,
         completedAt: typeof context.completedAt === "string" ? context.completedAt : null,
         runId: typeof suite?.workflowRun?.databaseId === "number" ? suite.workflowRun.databaseId : null,
+        jobId: typeof context.databaseId === "number" ? context.databaseId : null,
         workflow: typeof suite?.workflowRun?.workflow?.name === "string" ? suite.workflowRun.workflow.name : null,
       });
     } else if (context.__typename === "StatusContext") {
@@ -140,6 +142,7 @@ export function parseChecks(commitNodes: unknown): Check[] {
         startedAt: typeof context.createdAt === "string" ? context.createdAt : null,
         completedAt: null,
         runId: null,
+        jobId: null,
         workflow: null,
       });
     }
@@ -432,6 +435,57 @@ export function formatDecision(decision: string | null): string {
     case "REVIEW_REQUIRED": return "review required";
     default: return "no review";
   }
+}
+
+export function checkFailed(check: Check): boolean {
+  return check.status === "COMPLETED" && check.conclusion !== "SUCCESS" && check.conclusion !== "NEUTRAL" && check.conclusion !== "SKIPPED";
+}
+
+export function relativeTime(iso: string, now = Date.now()): string {
+  const time = Date.parse(iso);
+  if (!Number.isFinite(time)) return "";
+  const seconds = Math.max(0, Math.round((now - time) / 1000));
+  if (seconds < 60) return "just now";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  if (days < 14) return `${days}d ago`;
+  return iso.slice(0, 10);
+}
+
+export function formatDuration(startedAt: string | null, completedAt: string | null, now = Date.now()): string {
+  if (!startedAt) return "";
+  const start = Date.parse(startedAt);
+  const end = completedAt ? Date.parse(completedAt) : now;
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return "";
+  const seconds = Math.max(0, Math.round((end - start) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
+export type LogLine = { text: string; kind: "text" | "step" | "error" | "dim" };
+
+/** `gh run view --log` lines are `job\tstep\ttimestamp text`; group by step, drop timestamps. */
+export function parseRunLog(raw: string): LogLine[] {
+  const lines: LogLine[] = [];
+  let currentStep = "";
+  for (const rawLine of raw.replace(/\uFEFF/g, "").split("\n")) {
+    if (rawLine.length === 0) continue;
+    const match = /^([^\t]*)\t([^\t]*)\t(?:\d{4}-\d\d-\d\dT[\d:.]+Z )?(.*)$/.exec(rawLine);
+    const step = match ? `${match[1]} › ${match[2]}` : "";
+    const text = (match ? match[3] : rawLine).replace(/(?:\x1b|\^\[)\[[0-9;?]*[A-Za-z]/g, "").replace(/\r$/, "");
+    if (step && step !== currentStep) {
+      currentStep = step;
+      lines.push({ text: `▸ ${step}`, kind: "step" });
+    }
+    const kind: LogLine["kind"] = /^##\[error\]/.test(text) || /^(error|Error|ERROR|FAIL)\b/.test(text)
+      ? "error"
+      : /^##\[(group|endgroup|section|debug|command|notice|warning)\]/.test(text) ? "dim" : "text";
+    lines.push({ text, kind });
+  }
+  return lines;
 }
 
 export function formatCheckState(state: string | null): string {

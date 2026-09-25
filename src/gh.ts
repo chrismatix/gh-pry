@@ -112,7 +112,7 @@ query($owner: String!, $name: String!, $number: Int!) {
                 nodes {
                   __typename
                   ... on CheckRun {
-                    name status conclusion startedAt completedAt
+                    databaseId name status conclusion startedAt completedAt
                     checkSuite { workflowRun { databaseId workflow { name } } }
                   }
                   ... on StatusContext { context state createdAt }
@@ -201,11 +201,8 @@ export async function setThreadResolved(cwd: string, threadId: string, resolved:
   await mustRun("gh", ["api", "graphql", "-f", `query=${mutation}`, "-f", `id=${threadId}`], { cwd });
 }
 
-export async function fetchFailedLog(cwd: string, repo: string, runId: number, maxLines: number): Promise<string[]> {
-  const result = await run("gh", ["run", "view", String(runId), "--log-failed", "-R", repo], { cwd, timeoutMs: 60000 });
-  const text = result.code === 0 ? result.stdout : result.stdout || result.stderr;
-  const lines = text.split("\n").filter((line) => line.length > 0);
-  return lines.slice(-maxLines);
+export async function fetchJobLog(cwd: string, repo: string, jobId: number, failedOnly: boolean): Promise<string> {
+  return mustRun("gh", ["run", "view", "--job", String(jobId), failedOnly ? "--log-failed" : "--log", "-R", repo], { cwd, timeoutMs: 120000 });
 }
 
 export async function rerunFailed(cwd: string, repo: string, runId: number): Promise<void> {

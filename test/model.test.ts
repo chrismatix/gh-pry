@@ -3,6 +3,8 @@ import {
   allowedMergeMethods,
   buildStack,
   chainStack,
+  formatDuration,
+  relativeTime,
   checksArePending,
   parseChecks,
   parseGhStackView,
@@ -184,4 +186,17 @@ describe("wrapText", () => {
     expect(wrapText("one two three", 8)).toEqual(["one two", "three"]);
     expect(wrapText("", 10)).toEqual([""]);
   });
+});
+
+test("relativeTime and formatDuration", () => {
+  const now = Date.parse("2026-09-25T12:00:00Z");
+  expect(relativeTime("2026-09-25T11:59:40Z", now)).toBe("just now");
+  expect(relativeTime("2026-09-25T11:30:00Z", now)).toBe("30m ago");
+  expect(relativeTime("2026-09-25T03:00:00Z", now)).toBe("9h ago");
+  expect(relativeTime("2026-09-22T12:00:00Z", now)).toBe("3d ago");
+  expect(relativeTime("2026-08-01T12:00:00Z", now)).toBe("2026-08-01");
+  expect(relativeTime("", now)).toBe("");
+  expect(formatDuration("2026-09-25T11:58:35Z", "2026-09-25T12:00:00Z")).toBe("1m 25s");
+  expect(formatDuration("2026-09-25T11:59:50Z", null, now)).toBe("10s");
+  expect(formatDuration(null, null)).toBe("");
 });

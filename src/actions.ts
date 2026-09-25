@@ -1,6 +1,6 @@
 import {
   currentBranch,
-  fetchFailedLog,
+  fetchJobLog,
   fetchPr,
   firstLine,
   mustRun,
@@ -12,23 +12,23 @@ import {
   setThreadResolved,
   rerunFailed,
 } from "./gh.ts";
-import { allowedMergeMethods, checksArePending } from "./model.ts";
-import { activeThread, getState, setState, toast } from "./store.ts";
-
-const LOG_LINES = 200;
+import { allowedMergeMethods, checkFailed, checksArePending, parseRunLog, type Check } from "./model.ts";
+import { activeThread, getState, openPager, setState, toast, updatePager } from "./store.ts";
 
 export async function load(cwd: string, numberArg: number | null): Promise<void> {
-  setState({ phase: "loading", cwd });
+  setState({ phase: "loading", cwd, number: numberArg });
   const repo = await resolveRepo(cwd);
   if (!repo) {
     setState({ phase: "error", message: "not a GitHub repo, or gh could not resolve it" });
     return;
   }
+  setState({ repo });
   const number = numberArg ?? (await resolveBranchPr(cwd, repo));
   if (number === null) {
     setState({ phase: "error", message: "no PR for the current branch — pass a number: hpr <number>", repo });
     return;
   }
+  setState({ number });
   await refresh(cwd, repo, number);
 }
 
@@ -150,11 +150,7 @@ export function rerun(): Promise<void> {
   return withBusy(async () => {
     const { cwd, repo, pr } = getState();
     if (!repo || !pr) return;
-    const runIds = [...new Set(
-      pr.checks
-        .filter((check) => check.status === "COMPLETED" && check.conclusion !== "SUCCESS" && check.conclusion !== "NEUTRAL" && check.conclusion !== "SKIPPED" && check.runId !== null)
-        .map((check) => check.runId!),
-    )];
+    const runIds = [...new Set(pr.checks.filter((check) => checkFailed(check) && check.runId !== null).map((check) => check.runId!))];
     if (runIds.length === 0) {
       toast("no failed workflow runs to rerun");
       return;
@@ -169,14 +165,20 @@ export function rerun(): Promise<void> {
   });
 }
 
-export async function fetchLog(runId: number): Promise<string[]> {
+export async function openLog(check: Check): Promise<void> {
   const { cwd, repo } = getState();
-  if (!repo) return ["no repo"];
+  if (!repo || check.jobId === null) {
+    toast("no workflow job log for this check", "warning");
+    return;
+  }
+  const failedOnly = checkFailed(check);
+  const title = `${check.workflow ? `${check.workflow} / ` : ""}${check.name} — ${failedOnly ? "failed steps" : "full log"}`;
+  openPager(title, [{ text: "fetching log…", kind: "dim" }], true);
   try {
-    const lines = await fetchFailedLog(cwd, repo, runId, LOG_LINES);
-    return lines.length > 0 ? lines : ["(no failed-step log output)"];
+    const lines = parseRunLog(await fetchJobLog(cwd, repo, check.jobId, failedOnly));
+    updatePager({ lines: lines.length > 0 ? lines : [{ text: "(empty log)", kind: "dim" }], loading: false });
   } catch (error) {
-    return [`log fetch failed: ${firstLine(error)}`];
+    updatePager({ lines: [{ text: firstLine(error), kind: "error" }], loading: false });
   }
 }
 
