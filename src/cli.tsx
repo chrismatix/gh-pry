@@ -16,7 +16,8 @@ async function main(): Promise<void> {
   const syncViewport = () => setViewport(process.stdout.columns || 100, process.stdout.rows || 30);
   syncViewport();
   process.stdout.on("resize", syncViewport);
-  await load(process.cwd(), number);
+  // Mount first so the loading line is on screen while gh is still talking.
+  void load(process.cwd(), number);
 
   while (true) {
     syncViewport();

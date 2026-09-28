@@ -2,17 +2,17 @@ import {
   currentBranch,
   fetchJobLog,
   fetchPr,
+  fetchStack,
   firstLine,
   mustRun,
   postIssueComment,
   postReview,
   postThreadReply,
-  resolveBranchPr,
   resolveRepo,
   setThreadResolved,
   rerunFailed,
 } from "./gh.ts";
-import { allowedMergeMethods, checkFailed, checksArePending, parseRunLog, type Check } from "./model.ts";
+import { allowedMergeMethods, checkFailed, checksArePending, parseRunLog, type Check, type PrDetails, type StackInfo } from "./model.ts";
 import { activeThread, currentStackIndex, getState, moveSelection, openPager, setState, tabs, toast, updatePager } from "./store.ts";
 
 export async function load(cwd: string, numberArg: number | null): Promise<void> {
@@ -23,20 +23,48 @@ export async function load(cwd: string, numberArg: number | null): Promise<void>
     return;
   }
   setState({ repo });
-  const number = numberArg ?? (await resolveBranchPr(cwd, repo));
-  if (number === null) {
-    setState({ phase: "error", message: "no PR for the current branch — pass a number: gh pry <number>", repo });
+  if (numberArg !== null) {
+    await refresh(cwd, repo, numberArg);
     return;
   }
-  setState({ number });
-  await refresh(cwd, repo, number);
+  const branch = await currentBranch(cwd);
+  if (!branch) {
+    setState({ phase: "error", message: "detached HEAD — pass a number: gh pry <number>", repo });
+    return;
+  }
+  try {
+    const details = await fetchPr(cwd, repo, { branch });
+    setState({ phase: "ready", message: undefined, repo, number: details.number, pr: details, stack: null });
+    void loadStack(cwd, repo, details);
+  } catch (error) {
+    setState({ phase: "error", message: firstLine(error), repo });
+  }
+}
+
+/** Keep a known chain usable while a switch lands; drop it if this PR is not in it. */
+function remarkCurrent(stack: StackInfo | null, number: number): StackInfo | null {
+  if (!stack || !stack.entries.some((entry) => entry.number === number)) return null;
+  return { ...stack, entries: stack.entries.map((entry) => ({ ...entry, isCurrent: entry.number === number })) };
+}
+
+let stackRequest = 0;
+
+async function loadStack(cwd: string, repo: string, details: PrDetails): Promise<void> {
+  const request = (stackRequest += 1);
+  try {
+    const stack = await fetchStack(cwd, repo, details);
+    if (request === stackRequest && getState().number === details.number) setState({ stack });
+  } catch {
+    // The stack is optional; a failure here must not disturb the loaded PR.
+  }
 }
 
 export async function refresh(cwd = getState().cwd, repo = getState().repo, number = getState().number): Promise<void> {
   if (!repo || number === null) return;
   try {
-    const { details, stack } = await fetchPr(cwd, repo, number);
-    setState({ phase: "ready", message: undefined, repo, number, pr: details, stack });
+    const details = await fetchPr(cwd, repo, { number });
+    setState({ phase: "ready", message: undefined, repo, number, pr: details, stack: remarkCurrent(getState().stack, number) });
+    void loadStack(cwd, repo, details);
   } catch (error) {
     setState({ phase: "error", message: firstLine(error), repo, number });
   }

@@ -7,6 +7,7 @@ import {
   parseGhStackView,
   parseOpenPrs,
   parsePrDetails,
+  type OpenPrSummary,
   type PrDetails,
   type StackInfo,
 } from "./model";
@@ -69,27 +70,8 @@ export async function resolveRepo(cwd: string): Promise<string | null> {
   return match || null;
 }
 
-export async function resolveBranchPr(cwd: string, repo: string): Promise<number | null> {
-  // `gh pr view -R` refuses to infer the PR from the checked-out branch, so name it.
-  const branch = (await run("git", ["branch", "--show-current"], { cwd })).stdout.trim();
-  if (!branch) return null;
-  const result = await run("gh", ["pr", "view", branch, "--json", "number", "--jq", ".number", "-R", repo], { cwd });
-  if (result.code !== 0) return null;
-  const number = parseInt(result.stdout.trim(), 10);
-  return Number.isFinite(number) ? number : null;
-}
-
-const PR_QUERY = `
-query($owner: String!, $name: String!, $number: Int!) {
-  repository(owner: $owner, name: $name) {
-    mergeCommitAllowed squashMergeAllowed rebaseMergeAllowed deleteBranchOnMerge
-    pullRequests(states: OPEN, first: 100) {
-      nodes {
-        number title headRefName baseRefName isDraft reviewDecision
-        commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
-      }
-    }
-    pullRequest(number: $number) {
+const PR_FIELDS = `
+fragment prDetail on PullRequest {
       number title body state isDraft baseRefName headRefName
       reviewDecision mergeable mergeStateStatus
       author { login }
@@ -133,30 +115,118 @@ query($owner: String!, $name: String!, $number: Int!) {
           ... on ReviewRequestedEvent { actor { login } createdAt requestedReviewer { ... on User { login } } }
         }
       }
-    }
-  }
 }`;
 
-export async function fetchPr(cwd: string, repo: string, number: number): Promise<{ details: PrDetails; stack: StackInfo | null }> {
+const REPO_FIELDS = "mergeCommitAllowed squashMergeAllowed rebaseMergeAllowed deleteBranchOnMerge";
+
+const PR_BY_NUMBER = `
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    ${REPO_FIELDS}
+    pullRequest(number: $number) { ...prDetail }
+  }
+}
+${PR_FIELDS}`;
+
+const PR_BY_BRANCH = `
+query($owner: String!, $name: String!, $branch: String!) {
+  repository(owner: $owner, name: $name) {
+    ${REPO_FIELDS}
+    pullRequests(states: OPEN, headRefName: $branch, first: 1) { nodes { ...prDetail } }
+  }
+}
+${PR_FIELDS}`;
+
+export type PrTarget = { number: number } | { branch: string };
+
+/** Fetching by branch saves the extra `gh pr view` round trip on startup. */
+export async function fetchPr(cwd: string, repo: string, target: PrTarget): Promise<PrDetails> {
+  const [owner, name] = repo.split("/");
+  const byNumber = "number" in target;
+  const output = await mustRun("gh", [
+    "api", "graphql",
+    "-f", `query=${byNumber ? PR_BY_NUMBER : PR_BY_BRANCH}`,
+    "-f", `owner=${owner}`,
+    "-f", `name=${name}`,
+    ...(byNumber ? ["-F", `number=${target.number}`] : ["-f", `branch=${target.branch}`]),
+  ], { cwd });
+  const repository = JSON.parse(output)?.data?.repository;
+  const pullRequest = byNumber ? repository?.pullRequest : repository?.pullRequests?.nodes?.[0];
+  if (!pullRequest) {
+    throw new Error(byNumber
+      ? `PR #${target.number} not found in ${repo}`
+      : `no open PR for branch ${target.branch} in ${repo}`);
+  }
+  return parsePrDetails(pullRequest, repository);
+}
+
+const NEIGHBOURS_QUERY = `
+query($owner: String!, $name: String!, $base: String!, $head: String!) {
+  repository(owner: $owner, name: $name) {
+    parent: pullRequests(states: OPEN, headRefName: $base, first: 1) { nodes { ...summary } }
+    children: pullRequests(states: OPEN, baseRefName: $head, first: 10) { nodes { ...summary } }
+  }
+}
+fragment summary on PullRequest {
+  number title headRefName baseRefName isDraft reviewDecision
+  commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+}`;
+
+const MAX_CHAIN_HOPS = 8;
+
+async function fetchNeighbours(cwd: string, repo: string, base: string, head: string): Promise<{ parents: OpenPrSummary[]; children: OpenPrSummary[] }> {
   const [owner, name] = repo.split("/");
   const output = await mustRun("gh", [
     "api", "graphql",
-    "-f", `query=${PR_QUERY}`,
+    "-f", `query=${NEIGHBOURS_QUERY}`,
     "-f", `owner=${owner}`,
     "-f", `name=${name}`,
-    "-F", `number=${number}`,
-  ], { cwd });
+    "-f", `base=${base}`,
+    "-f", `head=${head}`,
+  ], { cwd, timeoutMs: 30000 });
   const repository = JSON.parse(output)?.data?.repository;
-  if (!repository?.pullRequest) throw new Error(`PR #${number} not found in ${repo}`);
-  const details = parsePrDetails(repository.pullRequest, repository);
-  const openPrs = parseOpenPrs(repository.pullRequests);
-  const ghStackBranches = await fetchGhStackBranches(cwd);
-  const stack = buildStack(
+  return { parents: parseOpenPrs(repository?.parent), children: parseOpenPrs(repository?.children) };
+}
+
+/**
+ * Walk the base-ref chain outward from this PR. Scanning every open PR is far
+ * too slow on a repo with thousands of them, so each hop is an indexed lookup.
+ */
+export async function fetchStack(cwd: string, repo: string, details: PrDetails): Promise<StackInfo | null> {
+  const collected: OpenPrSummary[] = [{
+    number: details.number,
+    title: details.title,
+    headRefName: details.headRefName,
+    baseRefName: details.baseRefName,
+    isDraft: details.isDraft,
+    reviewDecision: details.reviewDecision,
+    checksState: details.checksState,
+  }];
+  const seen = new Set([details.headRefName]);
+  const [ghStackBranches] = await Promise.all([
+    fetchGhStackBranches(cwd),
+    (async () => {
+      let base = details.baseRefName;
+      let head = details.headRefName;
+      for (let hop = 0; hop < MAX_CHAIN_HOPS; hop += 1) {
+        const { parents, children } = await fetchNeighbours(cwd, repo, base, head);
+        const next = [...parents, ...children].filter((pr) => !seen.has(pr.headRefName));
+        if (next.length === 0) break;
+        for (const pr of next) {
+          seen.add(pr.headRefName);
+          collected.push(pr);
+        }
+        base = parents[0]?.baseRefName ?? base;
+        head = children[0]?.headRefName ?? head;
+        if (!parents[0] && !children[0]) break;
+      }
+    })(),
+  ]);
+  return buildStack(
     { number: details.number, headRefName: details.headRefName, baseRefName: details.baseRefName },
-    openPrs,
+    collected,
     ghStackBranches,
   );
-  return { details, stack };
 }
 
 async function fetchGhStackBranches(cwd: string): Promise<{ branch: string; prNumber: number | null }[] | null> {
