@@ -207,7 +207,9 @@ function List({ state }: { state: State }) {
         const index = top + offset;
         return (
           <Box key={index}>
-            <Text color="cyan">{index === selection ? "› " : "  "}</Text>
+            <Box flexShrink={0} width={2}>
+              <Text color="cyan">{index === selection ? "› " : "  "}</Text>
+            </Box>
             <Text wrap="truncate">{row}</Text>
           </Box>
         );

@@ -93,6 +93,19 @@ describe("App", () => {
     expect(getState().scroll.conversation).toBeGreaterThan(0);
   });
 
+  test("the selection marker keeps its two columns when a row overflows", () => {
+    const long = "x".repeat(400);
+    const threads = [
+      { id: "A", isResolved: false, isOutdated: false, path: "src/a.ts", line: 1, side: "RIGHT" as const, comments: [{ databaseId: 1, author: "alice", body: long, createdAt: "2026-01-01" }] },
+      { id: "B", isResolved: false, isOutdated: false, path: "src/b.ts", line: 2, side: "RIGHT" as const, comments: [{ databaseId: 2, author: "bob", body: long, createdAt: "2026-01-01" }] },
+    ];
+    ready({ tab: "threads", pr: { ...samplePr(), threads } });
+    const rows = frameOf().split("\n").filter((line) => !line.includes("│") && (line.includes("src/a.ts") || line.includes("src/b.ts")));
+    expect(rows).toHaveLength(2);
+    expect(rows[0].startsWith("› ○ src/a.ts:1")).toBe(true);
+    expect(rows[1].startsWith("  ○ src/b.ts:2")).toBe(true);
+  });
+
   test("error phase renders the message", () => {
     setState({ phase: "error", message: "no PR for the current branch", overlay: null, pager: null, toast: null });
     expect(frameOf()).toContain("no PR for the current branch");

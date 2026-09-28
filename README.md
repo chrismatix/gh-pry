@@ -1,66 +1,45 @@
 # gh-pry
 
-Pry open a single GitHub PR from the terminal — conversation, review threads, and CI checks in one screen; reply, resolve, comment, review, and merge without leaving it; read failed CI logs in place; and open the diff in [hunk](https://hunk.dev) with one key.
+Pry open one GitHub pull request in the terminal. Conversation, review threads and CI checks in a single screen; reply, resolve, review and merge without leaving it; read failed CI logs in place; open the diff in [hunk](https://hunk.dev) with one key.
 
 ```bash
+gh extension install chrismatix/gh-pry
 gh pry          # the current branch's PR
 gh pry 123      # PR #123 in this repo
 ```
 
-Needs an authenticated [`gh`](https://cli.github.com) and, for the diff view, `hunk` on your PATH.
+![Review threads on a stacked PR](docs/review.png)
 
-## Install
+Press `enter` on a failed check to read its log, grouped by step with the errors in red. The same viewer opens long comments and whole threads.
 
-```bash
-gh extension install chrismatix/gh-pry
-```
-
-Runs as a `gh` extension, so `gh pry` works anywhere. The `gh-pry` executable also works on its own if you put it on your PATH.
-
-## Screen
-
-Header (title, author, branches, review decision, checks, mergeability, unresolved count), the tabs, a list that scrolls to fit the terminal, a preview panel with the selected item in full, and a key hint / status line. The Conversation tab starts with the PR description.
-
-## Stacks
-
-When the PR sits in a chain of PRs, a fourth **Stack** tab appears listing the whole chain trunk-first with each PR's checks and review decision. `enter` switches to the selected PR in place; `[` and `]` jump down and up the chain from any tab. The chain is derived from base-ref links between open PRs, and from `gh stack view` when that extension tracks the branches.
+![Reading a failed CI job log](docs/ci-log.png)
 
 ## Keys
 
 | Key | Action |
 | --- | --- |
-| `tab`, `1`/`2`/`3`/`4` | switch Conversation / Threads / Checks / Stack |
-| `[` / `]` | switch to the PR below / above in the stack |
-| `j`/`k`, `g`/`G` | move selection (the preview follows) |
-| `enter` | open the selected comment or thread in the reader; on Checks, the job log; on Stack, switch PR |
-| `d` | open the diff in hunk (checked-out branch → merge-base diff, else `gh pr diff \| hunk patch`) |
-| `r` / `x` / `h` | reply to thread / resolve-unresolve / show-hide resolved |
-| `c` | comment on the PR conversation |
-| `a` | submit a review (Comment / Approve / Request changes) |
-| `m` | merge (method picker; auto-merge offered while checks pend) |
-| `u` | on Checks: rerun failed runs |
-| `R` / `q` | refresh / quit |
+| `tab`, `1`–`4` | Conversation / Threads / Checks / Stack |
+| `j` `k`, `g` `G` | move; the preview follows |
+| `enter` | open the selected item; on Checks, its job log |
+| `r` `x` `h` | reply / resolve / show hidden resolved |
+| `c` `a` `m` | comment / review / merge |
+| `u` | rerun failed checks |
+| `[` `]` | previous / next PR in the stack |
+| `d` `R` `q` | diff in hunk / refresh / quit |
 
-### Reader and log viewer
+In the log viewer: `j` `k` `d` `u` `g` `G` to move, `h` `l` sideways, `/` then `n` `N` to search, `q` to close.
 
-`enter` on a check fetches that job's log through `gh run view --job` — failed steps only when the check failed, the full log otherwise — grouped by step with timestamps stripped and error lines in red. The same viewer shows long comments and whole threads.
+## Stacks
 
-| Key | Action |
-| --- | --- |
-| `j`/`k`, `d`/`u`, `g`/`G` | line, half page, top/bottom |
-| `h`/`l` | scroll sideways for long lines |
-| `/`, `n`/`N` | search (matches highlighted), next/previous match |
-| `q`, `esc` | close |
+When the PR sits in a chain, a Stack tab lists the whole chain with each PR's checks and review state. `enter` switches to it in place. The chain comes from base-ref links between open PRs, and from `gh stack view` when that extension tracks the branches.
 
-## How it works
+## Requires
 
-Reads go through one `gh api graphql` call (threads with resolved state, checks rollup with job ids, review decision, mergeability, timeline, and any base-ref stack); writes go through `gh`. Pressing `d` hands the terminal to hunk and returns you to the same screen when hunk exits.
+An authenticated [`gh`](https://cli.github.com), and `hunk` on your PATH for the diff key. Reads are one `gh api graphql` call; writes go through `gh`.
 
 ## Develop
 
 ```bash
-bun install
-bun run typecheck
-bun test            # model parsing + Ink render tests (ink-testing-library, headless)
+bun install && bun run typecheck && bun test
 bun run src/cli.tsx 123
 ```
