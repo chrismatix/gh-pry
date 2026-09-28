@@ -12,7 +12,7 @@ import {
   setThreadResolved,
   rerunFailed,
 } from "./gh.ts";
-import { allowedMergeMethods, checkFailed, checksArePending, parseRunLog, type Check, type PrDetails, type StackInfo } from "./model.ts";
+import { allowedMergeMethods, buildOutline, checkFailed, checksArePending, logLine, parseRunLog, type Check, type PrDetails, type StackInfo } from "./model.ts";
 import { activeThread, currentStackIndex, getState, moveSelection, openPager, setState, tabs, toast, updatePager } from "./store.ts";
 
 export async function load(cwd: string, numberArg: number | null): Promise<void> {
@@ -51,11 +51,13 @@ let stackRequest = 0;
 
 async function loadStack(cwd: string, repo: string, details: PrDetails): Promise<void> {
   const request = (stackRequest += 1);
+  setState({ stackLoading: true });
   try {
     const stack = await fetchStack(cwd, repo, details);
-    if (request === stackRequest && getState().number === details.number) setState({ stack });
+    if (request === stackRequest && getState().number === details.number) setState({ stack, stackLoading: false });
   } catch {
     // The stack is optional; a failure here must not disturb the loaded PR.
+    if (request === stackRequest) setState({ stackLoading: false });
   }
 }
 
@@ -221,12 +223,27 @@ export async function openLog(check: Check): Promise<void> {
   }
   const failedOnly = checkFailed(check);
   const title = `${check.workflow ? `${check.workflow} / ` : ""}${check.name} — ${failedOnly ? "failed steps" : "full log"}`;
-  openPager(title, [{ text: "fetching log…", kind: "dim" }], true);
+  openPager(title, [logLine("fetching log…", "dim")], true);
   try {
     const lines = parseRunLog(await fetchJobLog(cwd, repo, check.jobId, failedOnly));
-    updatePager({ lines: lines.length > 0 ? lines : [{ text: "(empty log)", kind: "dim" }], loading: false });
+    if (lines.length === 0) {
+      updatePager({ lines: [logLine("(empty log)", "dim")], loading: false });
+      return;
+    }
+    const outline = buildOutline(lines);
+    const firstFailed = outline.findIndex((step) => step.failed);
+    // Open on the step list so setup stages can be skipped; a single-step log
+    // has nothing to choose from, so go straight in.
+    updatePager({
+      lines,
+      outline,
+      loading: false,
+      showOutline: outline.length > 1,
+      outlineSelection: Math.max(firstFailed, 0),
+      top: 0,
+    });
   } catch (error) {
-    updatePager({ lines: [{ text: firstLine(error), kind: "error" }], loading: false });
+    updatePager({ lines: [logLine(firstLine(error), "error")], loading: false });
   }
 }
 

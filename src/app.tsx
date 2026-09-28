@@ -10,7 +10,9 @@ import {
   formatCheckState,
   formatDecision,
   formatDuration,
+  logLine,
   relativeTime,
+  sliceSegments,
   summarizeChecks,
   wrapText,
   type Check,
@@ -25,14 +27,19 @@ import {
   currentStackIndex,
   cycleTab,
   findInPager,
+  hasStack,
+  jumpToStep,
   layout,
+  moveOutline,
   moveSelection,
+  openPager,
   pagerRows,
   scrollPager,
   setState,
   setTab,
   stackEntries,
   stackNeighbour,
+  stepFrom,
   tabs,
   toast,
   updatePager,
@@ -69,7 +76,7 @@ function Header({ state }: { state: State }) {
     : pr.mergeStateStatus ? { text: pr.mergeStateStatus.toLowerCase(), color: "yellow" } : null;
   const stackPosition = state.stack
     ? `stack ${state.stack.entries.findIndex((entry) => entry.isCurrent) + 1}/${state.stack.entries.length}`
-    : null;
+    : state.stackLoading ? "stack …" : null;
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="gray" paddingX={1}>
       <Text wrap="truncate">
@@ -98,7 +105,9 @@ function tabLabel(state: State, tab: State["tab"]): string {
     case "conversation": return `Conversation ${conversationItems(state).length}`;
     case "threads": return `Threads ${visibleThreads(state).length}${state.hideResolved ? "" : " (all)"}`;
     case "checks": return `Checks ${state.pr!.checks.length}`;
-    case "stack": return `Stack ${currentStackIndex(state) + 1}/${stackEntries(state).length}`;
+    case "stack":
+      if (hasStack(state)) return `Stack ${currentStackIndex(state) + 1}/${stackEntries(state).length}`;
+      return state.stackLoading ? "Stack …" : "Stack —";
   }
 }
 
@@ -192,9 +201,9 @@ function List({ state }: { state: State }) {
     rows = visibleThreads(state).map((thread) => <ThreadRow key={thread.id} thread={thread} />);
     empty = state.hideResolved ? "No unresolved threads (h shows resolved)" : "No review threads";
   } else if (state.tab === "stack") {
-    const entries = stackEntries(state);
+    const entries = hasStack(state) ? stackEntries(state) : [];
     rows = entries.map((entry, index) => <StackRow key={index} entry={entry} position={index} total={entries.length} />);
-    empty = "Not part of a stack";
+    empty = state.stackLoading ? "Looking for a stack…" : "Not part of a stack";
   } else {
     rows = state.pr!.checks.map((check, index) => <CheckRow key={index} check={check} />);
     empty = "No checks reported";
@@ -220,28 +229,28 @@ function List({ state }: { state: State }) {
 
 function detailLines(state: State, width: number): LogLine[] {
   const body = (text: string | null, indent = "") =>
-    wrapText(text?.trim() ? text : "(empty)", Math.max(width - indent.length, 20)).map((line): LogLine => ({ text: indent + line, kind: text?.trim() ? "text" : "dim" }));
+    wrapText(text?.trim() ? text : "(empty)", Math.max(width - indent.length, 20)).map((line): LogLine => (logLine(indent + line, text?.trim() ? "text" : "dim")));
   if (state.tab === "conversation") {
     const item = conversationItems(state)[state.selection.conversation];
     if (!item) return [];
     const when = item.createdAt ? ` · ${relativeTime(item.createdAt)}` : "";
     switch (item.kind) {
-      case "description": return [{ text: `@${item.author} · description`, kind: "step" }, ...body(item.body)];
-      case "comment": return [{ text: `@${item.author} commented${when}`, kind: "step" }, ...body(item.body)];
-      case "review": return [{ text: `@${item.author} ${reviewVerb(item.reviewState).verb}${when}`, kind: "step" }, ...body(item.body)];
-      case "commit": return [{ text: `commit ${item.author}${when}`, kind: "step" }, ...body(item.body)];
-      case "force-push": return [{ text: `@${item.author} force-pushed${when}`, kind: "step" }];
-      case "merged": return [{ text: `@${item.author} merged${when}`, kind: "step" }];
-      case "review-requested": return [{ text: `@${item.author} requested review from @${item.body}${when}`, kind: "step" }];
+      case "description": return [logLine(`@${item.author} · description`, "step"), ...body(item.body)];
+      case "comment": return [logLine(`@${item.author} commented${when}`, "step"), ...body(item.body)];
+      case "review": return [logLine(`@${item.author} ${reviewVerb(item.reviewState).verb}${when}`, "step"), ...body(item.body)];
+      case "commit": return [logLine(`commit ${item.author}${when}`, "step"), ...body(item.body)];
+      case "force-push": return [logLine(`@${item.author} force-pushed${when}`, "step")];
+      case "merged": return [logLine(`@${item.author} merged${when}`, "step")];
+      case "review-requested": return [logLine(`@${item.author} requested review from @${item.body}${when}`, "step")];
     }
   }
   if (state.tab === "threads") {
     const thread = activeThread(state);
     if (!thread) return [];
     const badges = [thread.isResolved ? "resolved" : "unresolved", thread.isOutdated ? "outdated" : null].filter(Boolean).join(", ");
-    const lines: LogLine[] = [{ text: `${thread.path}:${thread.line ?? "?"} (${thread.side.toLowerCase()}) · ${badges}`, kind: "step" }];
+    const lines: LogLine[] = [logLine(`${thread.path}:${thread.line ?? "?"} (${thread.side.toLowerCase()}) · ${badges}`, "step")];
     for (const comment of thread.comments) {
-      lines.push({ text: `@${comment.author} · ${relativeTime(comment.createdAt)}`, kind: "dim" }, ...body(comment.body, "  "));
+      lines.push(logLine(`@${comment.author} · ${relativeTime(comment.createdAt)}`, "dim"), ...body(comment.body, "  "));
     }
     return lines;
   }
@@ -250,14 +259,14 @@ function detailLines(state: State, width: number): LogLine[] {
     if (!entry) return [];
     const heading = entry.number === null ? entry.headRefName : `#${entry.number} ${entry.title || entry.headRefName}`;
     return [
-      { text: heading, kind: "step" },
-      { text: `${entry.headRefName}${entry.baseRefName ? ` → ${entry.baseRefName}` : ""}`, kind: "text" },
-      { text: `${formatDecision(entry.reviewDecision)} · checks ${formatCheckState(entry.checksState)}${state.stack?.tracked ? " · tracked by gh stack" : ""}`, kind: "text" },
+      logLine(heading, "step"),
+      logLine(`${entry.headRefName}${entry.baseRefName ? ` → ${entry.baseRefName}` : ""}`, "text"),
+      logLine(`${formatDecision(entry.reviewDecision)} · checks ${formatCheckState(entry.checksState)}${state.stack?.tracked ? " · tracked by gh stack" : ""}`, "text"),
       entry.isCurrent
-        ? { text: "this is the PR you are reading", kind: "dim" }
+        ? logLine("this is the PR you are reading", "dim")
         : entry.number === null
-          ? { text: "no PR open for this branch yet", kind: "dim" }
-          : { text: "enter switches to this PR · [ and ] move down and up the stack", kind: "dim" },
+          ? logLine("no PR open for this branch yet", "dim")
+          : logLine("enter switches to this PR · [ and ] move down and up the stack", "dim"),
     ];
   }
   const check = state.pr!.checks[state.selection.checks];
@@ -265,9 +274,9 @@ function detailLines(state: State, width: number): LogLine[] {
   const { icon } = checkIcon(check);
   const status = check.status === "COMPLETED" ? (check.conclusion ?? "unknown").toLowerCase() : check.status.toLowerCase().replace("_", " ");
   return [
-    { text: `${icon} ${check.name}${check.workflow ? ` · ${check.workflow}` : ""}`, kind: "step" },
-    { text: `${status}${check.startedAt ? ` · started ${relativeTime(check.startedAt)}` : ""}${check.startedAt ? ` · ${formatDuration(check.startedAt, check.completedAt)}` : ""}`, kind: checkFailed(check) ? "error" : "text" },
-    { text: check.jobId !== null ? `enter opens the ${checkFailed(check) ? "failed-step" : "full"} log` : "no workflow log for this check", kind: "dim" },
+    logLine(`${icon} ${check.name}${check.workflow ? ` · ${check.workflow}` : ""}`, "step"),
+    logLine(`${status}${check.startedAt ? ` · started ${relativeTime(check.startedAt)}` : ""}${check.startedAt ? ` · ${formatDuration(check.startedAt, check.completedAt)}` : ""}`, checkFailed(check) ? "error" : "text"),
+    logLine(check.jobId !== null ? `enter opens the ${checkFailed(check) ? "failed-step" : "full"} log` : "no workflow log for this check", "dim"),
   ];
 }
 
@@ -328,8 +337,19 @@ function PagerView({ pager, state }: { pager: Pager; state: State }) {
       <Box flexDirection="column" height={rows}>
         {shown.map((line, index) => {
           const hit = needle.length > 0 && line.text.toLowerCase().includes(needle);
-          const text = line.text.slice(pager.column, pager.column + width) || " ";
-          return <Text key={pager.top + index} wrap="truncate" {...(hit ? { color: "yellow", bold: true } : lineColor(line))}>{text}</Text>;
+          if (hit) {
+            return <Text key={pager.top + index} wrap="truncate" color="yellow" bold>{line.text.slice(pager.column, pager.column + width) || " "}</Text>;
+          }
+          const pieces = sliceSegments(line.segments, pager.column, width);
+          if (pieces.length === 0) return <Text key={pager.top + index}> </Text>;
+          const fallback = lineColor(line);
+          return (
+            <Text key={pager.top + index} wrap="truncate">
+              {pieces.map((piece, offset) => (
+                <Text key={offset} color={piece.color ?? fallback.color} bold={piece.bold ?? fallback.bold} dimColor={piece.dim}>{piece.text}</Text>
+              ))}
+            </Text>
+          );
         })}
       </Box>
       {pager.searching ? (
@@ -349,9 +369,43 @@ function PagerView({ pager, state }: { pager: Pager; state: State }) {
           {pager.lines.length === 0 ? "0" : `${pager.top + 1}–${last}`}/{pager.lines.length}
           {pager.column > 0 ? ` · col ${pager.column + 1}` : ""}
           {pager.query ? ` · /${pager.query} (n/N)` : ""}
-          {"  ·  j/k scroll · d/u half page · g/G ends · h/l sideways · / search · q close"}
+          {pager.outline.length > 1 ? "  ·  o steps · [ ] step jump" : ""}
+          {"  ·  j/k scroll · pgup/pgdn page · d/u half · g/G ends · / search · q close"}
         </Text>
       )}
+    </Box>
+  );
+}
+
+function OutlineView({ pager, state }: { pager: Pager; state: State }) {
+  const rows = pagerRows(state);
+  const top = Math.max(0, Math.min(pager.outlineSelection - Math.floor(rows / 2), Math.max(pager.outline.length - rows, 0)));
+  const shown = pager.outline.slice(top, top + rows);
+  return (
+    <Box flexDirection="column">
+      <Text wrap="truncate">
+        <Text bold color="cyan">{pager.title}</Text>
+        <Text color="gray">  {pager.outline.length} steps · {pager.lines.length} lines</Text>
+      </Text>
+      <Box flexDirection="column" height={rows}>
+        {shown.map((step, offset) => {
+          const index = top + offset;
+          const selected = index === pager.outlineSelection;
+          const next = pager.outline[index + 1];
+          const length = (next ? next.line : pager.lines.length) - step.line - 1;
+          return (
+            <Text key={index} wrap="truncate" color={selected ? "cyan" : undefined} bold={selected}>
+              {selected ? "› " : "  "}
+              <Text color={step.failed ? "red" : selected ? "cyan" : "gray"}>{step.failed ? "✗" : "·"} </Text>
+              {step.label}
+              <Text color="gray">  {length} lines</Text>
+            </Text>
+          );
+        })}
+      </Box>
+      <Text color="gray" wrap="truncate">
+        step {pager.outlineSelection + 1}/{pager.outline.length}  ·  j/k move · enter open · o log · q close
+      </Text>
     </Box>
   );
 }
@@ -430,12 +484,30 @@ export function App() {
         return;
       }
       if (key.escape || input === "q") return setState({ pager: null });
+      if (pager.showOutline) {
+        if (input === "j" || key.downArrow) return moveOutline(1);
+        if (input === "k" || key.upArrow) return moveOutline(-1);
+        if (input === "g") return moveOutline("first");
+        if (input === "G") return moveOutline("last");
+        if (key.return) return jumpToStep(pager.outlineSelection);
+        if (input === "o") return updatePager({ showOutline: false });
+        return;
+      }
+      const page = pagerRows(state);
       if (input === "j" || key.downArrow) return scrollPager(1);
       if (input === "k" || key.upArrow) return scrollPager(-1);
-      if (input === "d" || key.pageDown) return scrollPager(Math.floor(pagerRows(state) / 2));
-      if (input === "u" || key.pageUp) return scrollPager(-Math.floor(pagerRows(state) / 2));
+      if (key.pageDown || (key.ctrl && input === "f")) return scrollPager(page);
+      if (key.pageUp || (key.ctrl && input === "b")) return scrollPager(-page);
+      if (input === "d") return scrollPager(Math.floor(page / 2));
+      if (input === "u") return scrollPager(-Math.floor(page / 2));
       if (input === "g") return scrollPager("first");
       if (input === "G") return scrollPager("last");
+      if (input === "o" && pager.outline.length > 0) return updatePager({ showOutline: true });
+      if (input === "[" || input === "]") {
+        const target = stepFrom(state, input === "]" ? 1 : -1);
+        if (target === null) { toast(input === "]" ? "last step" : "first step", "warning"); return; }
+        return jumpToStep(target);
+      }
       if (input === "l" || key.rightArrow) return updatePager({ column: pager.column + 20 });
       if (input === "h" || key.leftArrow) return updatePager({ column: Math.max(pager.column - 20, 0) });
       if (input === "/") return updatePager({ searching: true, query: "" });
@@ -495,7 +567,7 @@ export function App() {
         return;
       }
       const lines = detailLines(state, state.viewport.columns);
-      if (lines.length > 0) setState({ pager: { title: lines[0].text, lines: lines.slice(1), top: 0, column: 0, query: "", searching: false, loading: false } });
+      if (lines.length > 0) openPager(lines[0].text, lines.slice(1));
       return;
     }
 
@@ -519,7 +591,9 @@ export function App() {
 
   if (state.phase === "loading") return <Text color="yellow">Loading {state.number !== null ? `PR #${state.number}` : "the current branch's PR"}{state.repo ? ` from ${state.repo}` : ""}…</Text>;
   if (state.phase === "error") return <Text color="red">Error: {state.message}</Text>;
-  if (state.pager) return <PagerView pager={state.pager} state={state} />;
+  if (state.pager) return state.pager.showOutline
+    ? <OutlineView pager={state.pager} state={state} />
+    : <PagerView pager={state.pager} state={state} />;
 
   return (
     <Box flexDirection="column">

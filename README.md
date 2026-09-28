@@ -10,7 +10,7 @@ gh pry 123      # PR #123 in this repo
 
 ![Review threads on a stacked PR](docs/review.png)
 
-Press `enter` on a failed check to read its log, grouped by step with the errors in red. The same viewer opens long comments and whole threads.
+Press `enter` on a check to read its log. It opens on the step list, so you can skip setup stages and go straight to the one that failed. Colour from the job is preserved. The same viewer opens long comments and whole threads.
 
 ![Reading a failed CI job log](docs/ci-log.png)
 
@@ -27,11 +27,11 @@ Press `enter` on a failed check to read its log, grouped by step with the errors
 | `[` `]` | previous / next PR in the stack |
 | `d` `R` `q` | diff in hunk / refresh / quit |
 
-In the log viewer: `j` `k` `d` `u` `g` `G` to move, `h` `l` sideways, `/` then `n` `N` to search, `q` to close.
+In the log viewer: `j` `k` line, `pgup` `pgdn` page, `d` `u` half page, `g` `G` ends, `h` `l` sideways, `[` `]` jump between steps, `o` back to the step list, `/` then `n` `N` to search, `q` to close.
 
 ## Stacks
 
-When the PR sits in a chain, a Stack tab lists the whole chain with each PR's checks and review state. `enter` switches to it in place. The chain comes from base-ref links between open PRs, and from `gh stack view` when that extension tracks the branches.
+The Stack tab lists the chain this PR sits in, with each PR's checks and review state, and `enter` switches to one in place. The chain is resolved in the background, so the tab shows `…` until it lands and `—` when the PR stands alone. It comes from base-ref links between open PRs, and from `gh stack view` when that extension tracks the branches.
 
 ## Requires
 

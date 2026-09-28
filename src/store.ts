@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import type { LogLine, PrDetails, ReviewThread, StackEntry, StackInfo, TimelineItem } from "./model.ts";
+import type { LogLine, LogStep, PrDetails, ReviewThread, StackEntry, StackInfo, TimelineItem } from "./model.ts";
 
 export type Tab = "conversation" | "threads" | "checks" | "stack";
 
@@ -20,6 +20,9 @@ export type Pager = {
   query: string;
   searching: boolean;
   loading: boolean;
+  outline: LogStep[];
+  showOutline: boolean;
+  outlineSelection: number;
 };
 
 export type State = {
@@ -38,6 +41,7 @@ export type State = {
   pager: Pager | null;
   toast: Toast | null;
   busy: boolean;
+  stackLoading: boolean;
   viewport: { columns: number; rows: number };
 };
 
@@ -56,6 +60,7 @@ let state: State = {
   pager: null,
   toast: null,
   busy: false,
+  stackLoading: false,
   viewport: { columns: 100, rows: 30 },
 };
 
@@ -107,10 +112,16 @@ export function stackEntries(current: State): StackEntry[] {
   return current.stack?.entries ?? [];
 }
 
-/** The Stack tab only exists when this PR actually sits in a chain. */
-export function tabs(current: State): Tab[] {
-  const base: Tab[] = ["conversation", "threads", "checks"];
-  return stackEntries(current).length > 1 ? [...base, "stack"] : base;
+/** Always four tabs: the chain loads in the background, and a tab bar that
+ *  changes shape under the user's fingers is worse than one mostly-idle tab. */
+const TABS: Tab[] = ["conversation", "threads", "checks", "stack"];
+
+export function tabs(_current: State): Tab[] {
+  return TABS;
+}
+
+export function hasStack(current: State): boolean {
+  return stackEntries(current).length > 1;
 }
 
 export function tabLength(current: State): number {
@@ -186,7 +197,7 @@ export function stackNeighbour(current: State, delta: 1 | -1): StackEntry | null
 }
 
 export function openPager(title: string, lines: LogLine[], loading = false): void {
-  setState({ pager: { title, lines, top: 0, column: 0, query: "", searching: false, loading } });
+  setState({ pager: { title, lines, top: 0, column: 0, query: "", searching: false, loading, outline: [], showOutline: false, outlineSelection: 0 } });
 }
 
 export function updatePager(update: Partial<Pager>): void {
@@ -195,6 +206,35 @@ export function updatePager(update: Partial<Pager>): void {
 
 export function pagerRows(current: State): number {
   return Math.max(current.viewport.rows - 3, 3);
+}
+
+export function moveOutline(delta: number | "first" | "last"): void {
+  const pager = state.pager;
+  if (!pager) return;
+  const last = Math.max(pager.outline.length - 1, 0);
+  const next = delta === "first" ? 0 : delta === "last" ? last : Math.min(Math.max(pager.outlineSelection + delta, 0), last);
+  updatePager({ outlineSelection: next });
+}
+
+/** Jump the log to a step header, so setup stages can be skipped. */
+export function jumpToStep(index: number): void {
+  const pager = state.pager;
+  const step = pager?.outline[index];
+  if (!pager || !step) return;
+  updatePager({ showOutline: false, outlineSelection: index, top: Math.min(step.line, Math.max(pager.lines.length - pagerRows(state), 0)) });
+}
+
+export function stepFrom(current: State, delta: 1 | -1): number | null {
+  const pager = current.pager;
+  if (!pager || pager.outline.length === 0) return null;
+  if (delta === 1) {
+    const next = pager.outline.findIndex((step) => step.line > pager.top);
+    return next === -1 ? null : next;
+  }
+  for (let index = pager.outline.length - 1; index >= 0; index -= 1) {
+    if (pager.outline[index].line < pager.top) return index;
+  }
+  return null;
 }
 
 export function scrollPager(delta: number | "first" | "last"): void {

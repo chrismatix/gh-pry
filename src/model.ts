@@ -465,27 +465,138 @@ export function formatDuration(startedAt: string | null, completedAt: string | n
   return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
-export type LogLine = { text: string; kind: "text" | "step" | "error" | "dim" };
+export type LogSegment = { text: string; color?: string; bold?: boolean; dim?: boolean };
+export type LogLine = { text: string; segments: LogSegment[]; kind: "text" | "step" | "error" | "dim" };
+export type LogStep = { label: string; line: number; failed: boolean };
 
-/** `gh run view --log` lines are `job\tstep\ttimestamp text`; group by step, drop timestamps. */
+const SGR_COLORS: Record<number, string> = {
+  30: "black", 31: "red", 32: "green", 33: "yellow", 34: "blue", 35: "magenta", 36: "cyan", 37: "white",
+  90: "gray", 91: "redBright", 92: "greenBright", 93: "yellowBright",
+  94: "blueBright", 95: "magentaBright", 96: "cyanBright", 97: "whiteBright",
+};
+
+const CUBE = [0, 95, 135, 175, 215, 255];
+
+function xterm256(index: number): string {
+  if (index < 16) return SGR_COLORS[index < 8 ? index + 30 : index + 82] ?? "white";
+  if (index < 232) {
+    const offset = index - 16;
+    const channel = (value: number) => CUBE[value].toString(16).padStart(2, "0");
+    return `#${channel(Math.floor(offset / 36))}${channel(Math.floor(offset / 6) % 6)}${channel(offset % 6)}`;
+  }
+  const grey = (8 + (index - 232) * 10).toString(16).padStart(2, "0");
+  return `#${grey}${grey}${grey}`;
+}
+
+/** Actions logs carry real escapes and, on some lines, gh's sanitised `^[[36;1m` form. */
+function normalizeEscapes(text: string): string {
+  return text
+    .replace(/\^\[\[/g, "\x1b[")
+    .replace(/\x1b\[[0-9;?]*([A-Za-z])/g, (whole, letter: string) => (letter === "m" ? whole : ""));
+}
+
+function parseSegments(raw: string): LogSegment[] {
+  const segments: LogSegment[] = [];
+  let color: string | undefined;
+  let bold = false;
+  let dim = false;
+  let position = 0;
+  const pattern = /\x1b\[([0-9;]*)m/g;
+  const push = (text: string) => {
+    if (!text) return;
+    const last = segments[segments.length - 1];
+    if (last && last.color === color && last.bold === bold && last.dim === dim) last.text += text;
+    else segments.push({ text, color, bold, dim });
+  };
+  for (let match = pattern.exec(raw); match; match = pattern.exec(raw)) {
+    push(raw.slice(position, match.index));
+    const codes = (match[1] || "0").split(";").map((code) => parseInt(code || "0", 10));
+    for (let index = 0; index < codes.length; index += 1) {
+      const code = codes[index];
+      if (code === 0) { color = undefined; bold = false; dim = false; }
+      else if (code === 1) bold = true;
+      else if (code === 2) dim = true;
+      else if (code === 22) { bold = false; dim = false; }
+      else if (code === 39) color = undefined;
+      else if (code === 38 && codes[index + 1] === 5) { color = xterm256(codes[index + 2] ?? 7); index += 2; }
+      else if (code === 38 && codes[index + 1] === 2) {
+        const hex = (value: number) => (value ?? 0).toString(16).padStart(2, "0");
+        color = `#${hex(codes[index + 2])}${hex(codes[index + 3])}${hex(codes[index + 4])}`;
+        index += 4;
+      }
+      else if (SGR_COLORS[code]) color = SGR_COLORS[code];
+    }
+    position = match.index + match[0].length;
+  }
+  push(raw.slice(position));
+  return segments;
+}
+
+/**
+ * `gh run view --log` lines are `job\tstep\ttimestamp text`. Some jobs come
+ * back with every line labelled `UNKNOWN STEP`, so fall back to the runner's
+ * own `##[group]` markers to get sections worth skipping between.
+ */
 export function parseRunLog(raw: string): LogLine[] {
+  const parsed = raw.replace(/\uFEFF/g, "").split("\n").filter((line) => line.length > 0).map((rawLine) => {
+    const match = /^([^\t]*)\t([^\t]*)\t(?:\d{4}-\d\d-\d\dT[\d:.]+Z )?(.*)$/.exec(rawLine);
+    const step = match && match[2] && match[2] !== "UNKNOWN STEP" ? `${match[1]} \u203a ${match[2]}` : "";
+    return { step, body: normalizeEscapes((match ? match[3] : rawLine).replace(/\r$/, "")) };
+  });
+  const hasSteps = parsed.some((entry) => entry.step);
+
   const lines: LogLine[] = [];
   let currentStep = "";
-  for (const rawLine of raw.replace(/\uFEFF/g, "").split("\n")) {
-    if (rawLine.length === 0) continue;
-    const match = /^([^\t]*)\t([^\t]*)\t(?:\d{4}-\d\d-\d\dT[\d:.]+Z )?(.*)$/.exec(rawLine);
-    const step = match ? `${match[1]} › ${match[2]}` : "";
-    const text = (match ? match[3] : rawLine).replace(/(?:\x1b|\^\[)\[[0-9;?]*[A-Za-z]/g, "").replace(/\r$/, "");
-    if (step && step !== currentStep) {
-      currentStep = step;
-      lines.push({ text: `▸ ${step}`, kind: "step" });
+  for (const entry of parsed) {
+    const segments = parseSegments(entry.body);
+    const text = segments.map((segment) => segment.text).join("");
+    if (hasSteps) {
+      if (entry.step && entry.step !== currentStep) {
+        currentStep = entry.step;
+        lines.push({ text: `\u25b8 ${entry.step}`, segments: [{ text: `\u25b8 ${entry.step}` }], kind: "step" });
+      }
+    } else {
+      const group = /^##\[group\](.*)$/.exec(text);
+      if (group) {
+        lines.push({ text: `\u25b8 ${group[1]}`, segments: [{ text: `\u25b8 ${group[1]}` }], kind: "step" });
+        continue;
+      }
     }
     const kind: LogLine["kind"] = /^##\[error\]/.test(text) || /^(error|Error|ERROR|FAIL)\b/.test(text)
       ? "error"
       : /^##\[(group|endgroup|section|debug|command|notice|warning)\]/.test(text) ? "dim" : "text";
-    lines.push({ text, kind });
+    lines.push({ text, segments, kind });
   }
   return lines;
+}
+
+export function logLine(text: string, kind: LogLine["kind"] = "text"): LogLine {
+  return { text, segments: [{ text }], kind };
+}
+
+/** Step headers with their line offsets, so the reader can skip setup stages. */
+export function buildOutline(lines: LogLine[]): LogStep[] {
+  const steps: LogStep[] = [];
+  lines.forEach((line, index) => {
+    if (line.kind === "step") steps.push({ label: line.text.replace(/^▸ /, ""), line: index, failed: false });
+    else if (line.kind === "error" && steps.length > 0) steps[steps.length - 1].failed = true;
+  });
+  return steps;
+}
+
+/** Slice a styled line to a horizontal window, for sideways scrolling. */
+export function sliceSegments(segments: LogSegment[], start: number, width: number): LogSegment[] {
+  const out: LogSegment[] = [];
+  let column = 0;
+  for (const segment of segments) {
+    const end = column + segment.text.length;
+    if (end > start && column < start + width) {
+      out.push({ ...segment, text: segment.text.slice(Math.max(start - column, 0), start + width - column) });
+    }
+    column = end;
+    if (column >= start + width) break;
+  }
+  return out;
 }
 
 export function formatCheckState(state: string | null): string {

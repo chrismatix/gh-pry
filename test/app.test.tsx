@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { render } from "ink-testing-library";
 import { App } from "../src/app.tsx";
-import { parseRunLog, type PrDetails, type StackInfo, type TimelineItem } from "../src/model.ts";
-import { findInPager, getState, moveSelection, openPager, scrollPager, setState, stackNeighbour, tabs, updatePager, type State } from "../src/store.ts";
+import { buildOutline, logLine, parseRunLog, type PrDetails, type StackInfo, type TimelineItem } from "../src/model.ts";
+import { findInPager, getState, jumpToStep, moveSelection, openPager, pagerRows, scrollPager, setState, stackNeighbour, tabs, updatePager, type State } from "../src/store.ts";
 
 function samplePr(): PrDetails {
   return {
@@ -124,13 +124,21 @@ function sampleStack(): StackInfo {
 }
 
 describe("Stack", () => {
-  test("the tab only exists when the PR sits in a chain", () => {
-    ready();
-    expect(tabs(getState())).toEqual(["conversation", "threads", "checks"]);
-    expect(frameOf()).not.toContain("Stack");
-    ready({ stack: sampleStack() });
+  test("the tab is always present and reports loading, absent, or the chain", () => {
+    ready({ stackLoading: true });
     expect(tabs(getState())).toEqual(["conversation", "threads", "checks", "stack"]);
+    expect(frameOf()).toContain("Stack …");
+    ready({ stackLoading: false });
+    expect(frameOf()).toContain("Stack —");
+    ready({ stack: sampleStack() });
     expect(frameOf()).toContain("Stack 2/3");
+  });
+
+  test("the stack tab says it is still looking, then shows the chain", () => {
+    ready({ tab: "stack", stackLoading: true });
+    expect(frameOf()).toContain("Looking for a stack…");
+    ready({ tab: "stack", stackLoading: false });
+    expect(frameOf()).toContain("Not part of a stack");
   });
 
   test("lists the chain with the current entry marked", () => {
@@ -192,6 +200,70 @@ describe("Pager", () => {
     expect(frame).toContain("3–7/7");
     expect(frame).toContain("##[error]Process completed");
     expect(frame).not.toContain("Set up job");
+  });
+
+  test("keeps ANSI colour as segments instead of stripping it", () => {
+    const lines = parseRunLog("job\tstep\t2026-01-01T00:00:00.0Z \u001b[32mpassed\u001b[0m and \u001b[1;31mfailed\u001b[0m");
+    const body = lines[1];
+    expect(body.text).toBe("passed and failed");
+    expect(body.segments.map((piece) => [piece.text, piece.color, piece.bold])).toEqual([
+      ["passed", "green", false],
+      [" and ", undefined, false],
+      ["failed", "red", true],
+    ]);
+  });
+
+  test("buildOutline lists steps and marks the failing one", () => {
+    const outline = buildOutline(parseRunLog(raw));
+    expect(outline).toEqual([
+      { label: "test › Set up job", line: 0, failed: false },
+      { label: "test › Run tests", line: 3, failed: true },
+    ]);
+  });
+
+  test("falls back to group markers when gh reports UNKNOWN STEP", () => {
+    const log = [
+      "test\tUNKNOWN STEP\t2026-01-01T00:00:00.0Z ##[group]Operating System",
+      "test\tUNKNOWN STEP\t2026-01-01T00:00:01.0Z Ubuntu",
+      "test\tUNKNOWN STEP\t2026-01-01T00:00:02.0Z ##[endgroup]",
+      "test\tUNKNOWN STEP\t2026-01-01T00:00:03.0Z ##[group]Run bun test",
+      "test\tUNKNOWN STEP\t2026-01-01T00:00:04.0Z ##[error]boom",
+    ].join("\n");
+    expect(buildOutline(parseRunLog(log))).toEqual([
+      { label: "Operating System", line: 0, failed: false },
+      { label: "Run bun test", line: 3, failed: true },
+    ]);
+  });
+
+  test("opens on the step list and enter jumps past setup", () => {
+    const setup = Array.from({ length: 40 }, (_, index) => `test\tSet up job\t2026-01-01T00:00:0${index % 10}.0Z setup line ${index}`);
+    const body = Array.from({ length: 40 }, (_, index) => `test\tRun tests\t2026-01-01T00:01:0${index % 10}.0Z result line ${index}`);
+    const lines = parseRunLog([...setup, ...body].join("\n"));
+    ready({ viewport: { columns: 100, rows: 20 } });
+    openPager("ci / test", lines);
+    updatePager({ outline: buildOutline(lines), showOutline: true, outlineSelection: 1 });
+    const outlineFrame = frameOf();
+    expect(outlineFrame).toContain("2 steps");
+    expect(outlineFrame).toContain("› · test › Run tests  40 lines");
+    expect(outlineFrame).toContain("  · test › Set up job  40 lines");
+    jumpToStep(1);
+    expect(getState().pager?.showOutline).toBe(false);
+    expect(getState().pager?.top).toBe(41);
+    const logFrame = frameOf();
+    expect(logFrame).toContain("result line 0");
+    expect(logFrame).not.toContain("setup line 39");
+  });
+
+  test("page keys move a full page and half-page keys move half", () => {
+    ready({ viewport: { columns: 100, rows: 30 } });
+    openPager("log", Array.from({ length: 200 }, (_, index) => logLine(`line ${index}`)));
+    const rows = pagerRows(getState());
+    scrollPager(rows);
+    expect(getState().pager?.top).toBe(rows);
+    scrollPager(-Math.floor(rows / 2));
+    expect(getState().pager?.top).toBe(rows - Math.floor(rows / 2));
+    scrollPager("last");
+    expect(getState().pager?.top).toBe(200 - rows);
   });
 
   test("search jumps to the next match and wraps around", () => {
