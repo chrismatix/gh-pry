@@ -7,6 +7,10 @@ import { openDiffInHunk } from "./diff.ts";
 import { setViewport } from "./store.ts";
 
 async function main(): Promise<void> {
+  if (!process.stdin.isTTY) {
+    console.error("gh pry needs an interactive terminal (stdin is not a TTY).");
+    process.exit(1);
+  }
   const arg = process.argv[2];
   const number = arg && /^\d+$/.test(arg) ? parseInt(arg, 10) : null;
   const syncViewport = () => setViewport(process.stdout.columns || 100, process.stdout.rows || 30);
