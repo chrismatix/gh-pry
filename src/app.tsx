@@ -108,7 +108,7 @@ function tabLabel(state: State, tab: State["tab"]): string {
     case "threads": return `Threads ${visibleThreads(state).length}${state.hideResolved ? "" : " (all)"}`;
     case "checks": return `Checks ${state.pr!.checks.length}`;
     case "stack":
-      if (hasStack(state)) return `Stack ${currentStackIndex(state) + 1}/${stackEntries(state).length}`;
+      if (hasStack(state)) return `Stack ${stackEntries(state).length - currentStackIndex(state)}/${stackEntries(state).length}`;
       return state.stackLoading ? "Stack …" : "Stack —";
   }
 }
@@ -244,19 +244,21 @@ function CheckRow({ check }: { check: Check }) {
   );
 }
 
+/** `position` counts from the base, which merges first. */
 function StackRow({ entry, position, total }: { entry: StackEntry; position: number; total: number }) {
-  const connector = total === 1 ? "─" : position === 0 ? "┌" : position === total - 1 ? "└" : "├";
   const checkGlyph = formatCheckState(entry.checksState);
   const checkColor = entry.checksState === "SUCCESS" ? "green" : entry.checksState === "PENDING" ? "yellow" : entry.checksState === null ? "gray" : "red";
   return (
     <Text>
-      <Text color="magenta">{connector} </Text>
+      <Text color="magenta">{String(position).padStart(String(total).length)} </Text>
       <Text color={checkColor}>{checkGlyph} </Text>
       {entry.number === null
         ? <Text color="gray">{entry.headRefName} (no PR)</Text>
         : <Text bold={entry.isCurrent} color={entry.isCurrent ? "cyan" : undefined}>#{entry.number} {entry.title || entry.headRefName}</Text>}
       {entry.reviewDecision ? <Text color={entry.reviewDecision === "APPROVED" ? "green" : entry.reviewDecision === "CHANGES_REQUESTED" ? "red" : "gray"}>  {formatDecision(entry.reviewDecision)}</Text> : null}
       {entry.isCurrent ? <Text color="cyan" bold>  ◂ here</Text> : null}
+      {position === total ? <Text color="magenta">  ▲ top</Text> : null}
+      {position === 1 ? <Text color="magenta">  ▼ onto {entry.baseRefName ?? "the base"} · merges first</Text> : null}
     </Text>
   );
 }
@@ -275,7 +277,7 @@ function List({ state }: { state: State }) {
     empty = state.hideResolved ? "No unresolved threads (h shows resolved)" : "No review threads";
   } else if (state.tab === "stack") {
     const entries = hasStack(state) ? stackEntries(state) : [];
-    rows = entries.map((entry, index) => <StackRow key={index} entry={entry} position={index} total={entries.length} />);
+    rows = entries.map((entry, index) => <StackRow key={index} entry={entry} position={entries.length - index} total={entries.length} />);
     empty = state.stackLoading ? "Looking for a stack…" : "Not part of a stack";
   } else {
     rows = state.pr!.checks.map((check, index) => <CheckRow key={index} check={check} />);
@@ -332,7 +334,7 @@ function detailLines(state: State, width: number): LogLine[] {
         ? logLine("this is the PR you are reading", "dim")
         : entry.number === null
           ? logLine("no PR open for this branch yet", "dim")
-          : logLine("enter switches to this PR · [ and ] move down and up the stack", "dim"),
+          : logLine("enter switches to this PR · [ moves down the stack, ] up", "dim"),
     ];
   }
   const check = state.pr!.checks[state.selection.checks];

@@ -144,23 +144,26 @@ describe("Stack", () => {
     expect(frameOf()).toContain("Not part of a stack");
   });
 
-  test("lists the chain with the current entry marked", () => {
+  test("lists the chain top first, with the current entry and both ends marked", () => {
     ready({ stack: sampleStack(), tab: "stack", selection: { conversation: 0, threads: 0, checks: 0, stack: 1 } });
-    const frame = frameOf();
-    expect(frame).toContain("┌ ✓ #5 base helpers  approved");
-    expect(frame).toContain("#7 Add relative-time helper  changes requested  ◂ here");
-    expect(frame).toContain("└ · feat/c (no PR)");
-    expect(frame).toContain("this is the PR you are reading");
+    const rows = frameOf().split("\n");
+    const top = rows.findIndex((row) => row.includes("feat/c (no PR)"));
+    const here = rows.findIndex((row) => row.includes("#7 Add relative-time helper  changes requested  ◂ here"));
+    const base = rows.findIndex((row) => row.includes("1 ✓ #5 base helpers  approved  ▼ onto main · merges first"));
+    expect(rows[top]).toContain("3 · feat/c (no PR)  ▲ top");
+    expect(top).toBeLessThan(here);
+    expect(here).toBeLessThan(base);
+    expect(frameOf()).toContain("this is the PR you are reading");
   });
 
   test("previews a switch target and names branchless entries", () => {
-    ready({ stack: sampleStack(), tab: "stack", selection: { conversation: 0, threads: 0, checks: 0, stack: 0 } });
+    ready({ stack: sampleStack(), tab: "stack", selection: { conversation: 0, threads: 0, checks: 0, stack: 2 } });
     const frame = frameOf();
     expect(frame).toContain("#5 base helpers");
     expect(frame).toContain("feat/a → main");
     expect(frame).toContain("tracked by gh stack");
     expect(frame).toContain("enter switches to this PR");
-    ready({ stack: sampleStack(), tab: "stack", selection: { conversation: 0, threads: 0, checks: 0, stack: 2 } });
+    ready({ stack: sampleStack(), tab: "stack", selection: { conversation: 0, threads: 0, checks: 0, stack: 0 } });
     expect(frameOf()).toContain("no PR open for this branch yet");
   });
 

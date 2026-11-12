@@ -55,7 +55,11 @@ async function loadStack(cwd: string, repo: string, details: PrDetails): Promise
   setState({ stackLoading: true });
   try {
     const stack = await fetchStack(cwd, repo, details);
-    if (request === stackRequest && getState().number === details.number) setState({ stack, stackLoading: false });
+    if (request !== stackRequest || getState().number !== details.number) return;
+    const firstLoad = getState().stack === null;
+    setState({ stack, stackLoading: false });
+    // Only the first load moves the cursor; auto-refresh must leave it where the user put it.
+    if (firstLoad) setState({ selection: { ...getState().selection, stack: Math.max(currentStackIndex(getState()), 0) } });
   } catch {
     // The stack is optional; a failure here must not disturb the loaded PR.
     if (request === stackRequest) setState({ stackLoading: false });

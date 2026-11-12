@@ -111,8 +111,9 @@ export function visibleThreads(current: State): ReviewThread[] {
   return [...current.pr.threads].sort((a, b) => Number(a.isResolved) - Number(b.isResolved));
 }
 
+/** Top of the stack first, as gh stack draws it, so moving down the list moves toward the base. */
 export function stackEntries(current: State): StackEntry[] {
-  return current.stack?.entries ?? [];
+  return [...(current.stack?.entries ?? [])].reverse();
 }
 
 /** Always four tabs: the chain loads in the background, and a tab bar that
@@ -189,12 +190,12 @@ export function currentStackIndex(current: State): number {
   return stackEntries(current).findIndex((entry) => entry.isCurrent);
 }
 
-/** The next stack entry that has a PR to open; null at the end of the chain. */
+/** The next stack entry up (1) or down (-1) that has a PR to open; null at the end of the chain. */
 export function stackNeighbour(current: State, delta: 1 | -1): StackEntry | null {
   const entries = stackEntries(current);
   const from = currentStackIndex(current);
   if (from < 0) return null;
-  for (let index = from + delta; index >= 0 && index < entries.length; index += delta) {
+  for (let index = from - delta; index >= 0 && index < entries.length; index -= delta) {
     if (entries[index].number !== null) return entries[index];
   }
   return null;
