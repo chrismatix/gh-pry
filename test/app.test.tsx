@@ -22,8 +22,8 @@ function samplePr(): PrDetails {
     assignees: [],
     reviewRequests: ["alice"],
     threads: [
-      { id: "T1", isResolved: false, isOutdated: false, path: "src/x.ts", line: 4, side: "RIGHT", comments: [{ databaseId: 1, author: "alice", body: "clamp negatives?", createdAt: "2026-01-01" }, { databaseId: 3, author: "chris", body: "will do", createdAt: "2026-01-02" }] },
-      { id: "T2", isResolved: true, isOutdated: false, path: "README.md", line: 2, side: "RIGHT", comments: [{ databaseId: 2, author: "bob", body: "nit", createdAt: "2026-01-02" }] },
+      { id: "T1", isResolved: false, isOutdated: false, path: "src/x.ts", line: 4, side: "RIGHT", diffHunk: null, comments: [{ databaseId: 1, author: "alice", body: "clamp negatives?", createdAt: "2026-01-01" }, { databaseId: 3, author: "chris", body: "will do", createdAt: "2026-01-02" }] },
+      { id: "T2", isResolved: true, isOutdated: false, path: "README.md", line: 2, side: "RIGHT", diffHunk: null, comments: [{ databaseId: 2, author: "bob", body: "nit", createdAt: "2026-01-02" }] },
     ],
     checks: [
       { name: "test", kind: "check-run", status: "COMPLETED", conclusion: "SUCCESS", startedAt: "2026-01-01T00:00:00Z", completedAt: "2026-01-01T00:01:05Z", runId: 42, jobId: 420, workflow: "CI" },
@@ -70,7 +70,7 @@ describe("App", () => {
     ready({ tab: "threads" });
     const frame = frameOf();
     expect(frame).toContain("src/x.ts:4");
-    expect(frame).toContain("+1");
+    expect(frame).toContain("+1 reply");
     expect(frame).not.toContain("README.md:2");
     expect(frame).toContain("will do");
   });
@@ -96,8 +96,8 @@ describe("App", () => {
   test("the selection marker keeps its two columns when a row overflows", () => {
     const long = "x".repeat(400);
     const threads = [
-      { id: "A", isResolved: false, isOutdated: false, path: "src/a.ts", line: 1, side: "RIGHT" as const, comments: [{ databaseId: 1, author: "alice", body: long, createdAt: "2026-01-01" }] },
-      { id: "B", isResolved: false, isOutdated: false, path: "src/b.ts", line: 2, side: "RIGHT" as const, comments: [{ databaseId: 2, author: "bob", body: long, createdAt: "2026-01-01" }] },
+      { id: "A", isResolved: false, isOutdated: false, path: "src/a.ts", line: 1, side: "RIGHT" as const, diffHunk: null, comments: [{ databaseId: 1, author: "alice", body: long, createdAt: "2026-01-01" }] },
+      { id: "B", isResolved: false, isOutdated: false, path: "src/b.ts", line: 2, side: "RIGHT" as const, diffHunk: null, comments: [{ databaseId: 2, author: "bob", body: long, createdAt: "2026-01-01" }] },
     ];
     ready({ tab: "threads", pr: { ...samplePr(), threads } });
     const rows = frameOf().split("\n").filter((line) => !line.includes("│") && (line.includes("src/a.ts") || line.includes("src/b.ts")));

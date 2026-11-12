@@ -6,6 +6,7 @@ import { useState } from "react";
 import * as actions from "./actions.ts";
 import { requestExit } from "./control.ts";
 import { hostDiffFd, sendDiffToHost } from "./diff.ts";
+import { renderMarkdown, summary } from "./markdown.ts";
 import {
   checkFailed,
   formatCheckState,
@@ -15,9 +16,9 @@ import {
   relativeTime,
   sliceSegments,
   summarizeChecks,
-  wrapText,
   type Check,
   type LogLine,
+  type LogSegment,
   type ReviewThread,
   type StackEntry,
   type TimelineItem,
@@ -63,9 +64,6 @@ function reviewVerb(reviewState: string | null): { verb: string; color: string }
   return { verb: "reviewed", color: "yellow" };
 }
 
-function firstLineOf(text: string | null): string {
-  return (text ?? "").split("\n").find((line) => line.trim().length > 0) ?? "";
-}
 
 function Header({ state }: { state: State }) {
   const pr = state.pr!;
@@ -128,17 +126,17 @@ function TimelineRow({ item }: { item: TimelineItem }) {
   const when = <Text color="gray">  {relativeTime(item.createdAt)}</Text>;
   switch (item.kind) {
     case "description":
-      return <Text><Text color="cyan">@{item.author}</Text> <Text bold>description</Text> <Text color="gray">{firstLineOf(item.body) || "(empty)"}</Text></Text>;
+      return <Text><Text color="cyan">@{item.author}</Text> <Text bold>description</Text> <Text color="gray">{summary(item.body) || "(empty)"}</Text></Text>;
     case "comment":
-      return <Text><Text color="cyan">@{item.author}</Text> commented <Text color="gray">{firstLineOf(item.body)}</Text>{when}</Text>;
+      return <Text><Text color="cyan">@{item.author}</Text> commented <Text color="gray">{summary(item.body)}</Text>{when}</Text>;
     case "review": {
       const { verb, color } = reviewVerb(item.reviewState);
-      return <Text><Text color="cyan">@{item.author}</Text> <Text color={color}>{verb}</Text> <Text color="gray">{firstLineOf(item.body)}</Text>{when}</Text>;
+      return <Text><Text color="cyan">@{item.author}</Text> <Text color={color}>{verb}</Text> <Text color="gray">{summary(item.body)}</Text>{when}</Text>;
     }
     case "force-push":
       return <Text><Text color="cyan">@{item.author}</Text> <Text color="red">force-pushed</Text>{when}</Text>;
     case "commit":
-      return <Text color="gray">◦ {item.author} {firstLineOf(item.body)}{when}</Text>;
+      return <Text color="gray">◦ {item.author} {summary(item.body)}{when}</Text>;
     case "merged":
       return <Text><Text color="cyan">@{item.author}</Text> <Text color="magenta">merged</Text>{when}</Text>;
     case "review-requested":
@@ -149,15 +147,49 @@ function TimelineRow({ item }: { item: TimelineItem }) {
 function ThreadRow({ thread }: { thread: ReviewThread }) {
   const root = thread.comments[0];
   const replies = thread.comments.length - 1;
+  const slash = thread.path.lastIndexOf("/") + 1;
+  const folders = thread.path.slice(0, slash).split("/").filter(Boolean);
+  const folder = folders.length > 1 ? `…/${folders[folders.length - 1]}/` : thread.path.slice(0, slash);
+  const faded = thread.isResolved || thread.isOutdated;
   return (
     <Text>
       <Text color={thread.isResolved ? "green" : "yellow"}>{thread.isResolved ? "✓" : "○"} </Text>
-      <Text color={thread.isResolved ? "gray" : "white"}>{thread.path}:{thread.line ?? "?"}</Text>
-      {thread.isOutdated ? <Text color="gray"> [outdated]</Text> : null}
-      {root ? <Text color="gray">  <Text color="cyan">@{root.author}</Text> {firstLineOf(root.body)}</Text> : null}
-      {replies > 0 ? <Text color="gray">  +{replies}</Text> : null}
+      <Text color="gray">{folder}</Text>
+      <Text bold={!faded} color={faded ? "gray" : undefined}>{thread.path.slice(slash)}:{thread.line ?? "?"}</Text>
+      {root ? <Text>  <Text color="cyan">@{root.author}</Text> <Text color={faded ? "gray" : undefined}>{summary(root.body)}</Text></Text> : null}
+      {replies > 0 ? <Text color="gray">  +{replies} {replies === 1 ? "reply" : "replies"}</Text> : null}
+      {thread.isOutdated ? <Text color="gray">  · outdated</Text> : null}
     </Text>
   );
+}
+
+/** A review thread read like a chat: where it is, the code it is about, then each comment. */
+function threadLines(thread: ReviewThread, width: number): LogLine[] {
+  const slash = thread.path.lastIndexOf("/") + 1;
+  const status: LogSegment = thread.isResolved ? { text: "✓ resolved", color: "green" } : { text: "○ unresolved", color: "yellow" };
+  const header: LogSegment[] = [
+    { text: thread.path.slice(0, slash), color: "gray" },
+    { text: `${thread.path.slice(slash)}:${thread.line ?? "?"}`, color: "cyan", bold: true },
+    { text: "  " }, status,
+    ...(thread.isOutdated ? [{ text: " · outdated", color: "gray" }] : []),
+  ];
+  const lines: LogLine[] = [{ text: header.map((segment) => segment.text).join(""), segments: header, kind: "step" }];
+  const hunk = (thread.diffHunk ?? "").split("\n").filter((line) => line && !line.startsWith("@@")).slice(-4);
+  for (const code of hunk) {
+    const color = code.startsWith("+") ? "green" : code.startsWith("-") ? "red" : "gray";
+    lines.push({ text: `  ${code}`, segments: [{ text: "▏ ", color: "gray" }, { text: code, color }], kind: "text" });
+  }
+  thread.comments.forEach((comment, index) => {
+    lines.push(logLine(""));
+    const who: LogSegment[] = [
+      { text: index === 0 ? "" : "↳ ", color: "gray" },
+      { text: `@${comment.author}`, color: "cyan", bold: true },
+      { text: ` · ${relativeTime(comment.createdAt)}`, color: "gray" },
+    ];
+    lines.push({ text: who.map((segment) => segment.text).join(""), segments: who, kind: "text" });
+    lines.push(...renderMarkdown(comment.body, width, [{ text: "│ ", color: index === 0 ? "cyan" : "gray" }]));
+  });
+  return lines;
 }
 
 function CheckRow({ check }: { check: Check }) {
@@ -229,8 +261,7 @@ function List({ state }: { state: State }) {
 }
 
 function detailLines(state: State, width: number): LogLine[] {
-  const body = (text: string | null, indent = "") =>
-    wrapText(text?.trim() ? text : "(empty)", Math.max(width - indent.length, 20)).map((line): LogLine => (logLine(indent + line, text?.trim() ? "text" : "dim")));
+  const body = (text: string | null) => renderMarkdown(text ?? "", width);
   if (state.tab === "conversation") {
     const item = conversationItems(state)[state.selection.conversation];
     if (!item) return [];
@@ -247,13 +278,7 @@ function detailLines(state: State, width: number): LogLine[] {
   }
   if (state.tab === "threads") {
     const thread = activeThread(state);
-    if (!thread) return [];
-    const badges = [thread.isResolved ? "resolved" : "unresolved", thread.isOutdated ? "outdated" : null].filter(Boolean).join(", ");
-    const lines: LogLine[] = [logLine(`${thread.path}:${thread.line ?? "?"} (${thread.side.toLowerCase()}) · ${badges}`, "step")];
-    for (const comment of thread.comments) {
-      lines.push(logLine(`@${comment.author} · ${relativeTime(comment.createdAt)}`, "dim"), ...body(comment.body, "  "));
-    }
-    return lines;
+    return thread ? threadLines(thread, width) : [];
   }
   if (state.tab === "stack") {
     const entry = stackEntries(state)[state.selection.stack];
@@ -290,13 +315,25 @@ function lineColor(line: LogLine): { color?: string; bold?: boolean } {
   }
 }
 
+function StyledLine({ line }: { line: LogLine }) {
+  const fallback = lineColor(line);
+  if (!line.text) return <Text> </Text>;
+  return (
+    <Text wrap="truncate">
+      {line.segments.map((piece, offset) => (
+        <Text key={offset} color={piece.color ?? fallback.color} bold={piece.bold ?? fallback.bold} dimColor={piece.dim}>{piece.text}</Text>
+      ))}
+    </Text>
+  );
+}
+
 function Preview({ state }: { state: State }) {
   const { previewRows } = layout(state);
   const lines = detailLines(state, state.viewport.columns - 4);
   const shown = lines.length > previewRows ? lines.slice(0, previewRows - 1) : lines;
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="gray" paddingX={1} height={previewRows + 2}>
-      {shown.map((line, index) => <Text key={index} wrap="truncate" {...lineColor(line)}>{line.text || " "}</Text>)}
+      {shown.map((line, index) => <StyledLine key={index} line={line} />)}
       {lines.length > previewRows ? <Text color="gray">… {lines.length - shown.length} more lines · enter opens</Text> : null}
     </Box>
   );

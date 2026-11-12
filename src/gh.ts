@@ -81,7 +81,8 @@ fragment prDetail on PullRequest {
       reviewRequests(first: 10) { nodes { requestedReviewer { ... on User { login } ... on Team { name } } } }
       reviewThreads(first: 100) {
         nodes {
-          id isResolved isOutdated path line diffSide
+          id isResolved isOutdated path line originalLine diffSide
+          hunk: comments(first: 1) { nodes { diffHunk } }
           comments(first: 50) { nodes { databaseId author { login } body createdAt } }
         }
       }

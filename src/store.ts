@@ -136,8 +136,9 @@ export function tabLength(current: State): number {
 /** Rows split: bordered header 4, tabs 1, list, bordered preview, footer 2; one row spare so Ink never clears the screen. */
 export function layout(current: State): { listRows: number; previewRows: number } {
   const available = Math.max(current.viewport.rows - 1 - 4 - 1 - 2, 6);
-  const previewRows = Math.min(12, Math.max(3, Math.floor(available * 0.45) - 2));
-  return { listRows: Math.max(available - previewRows - 2, 3), previewRows };
+  // The list takes only the rows it fills, so the preview gets the rest for reading.
+  const listRows = Math.min(Math.max(tabLength(current), 3), Math.max(Math.floor(available * 0.4), 3));
+  return { listRows, previewRows: Math.max(available - listRows - 2, 3) };
 }
 
 function clampScroll(current: State, tab: Tab, selected: number): number {

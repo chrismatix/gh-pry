@@ -12,6 +12,8 @@ export type ReviewThread = {
   path: string;
   line: number | null;
   side: "LEFT" | "RIGHT";
+  /** The diff GitHub showed around the commented line; that line is its last. */
+  diffHunk: string | null;
   comments: ThreadComment[];
 };
 
@@ -158,8 +160,10 @@ export function parsePrDetails(pullRequest: Record<string, unknown>, repository:
       isResolved: thread.isResolved === true,
       isOutdated: thread.isOutdated === true,
       path: str(thread.path),
-      line: typeof thread.line === "number" ? thread.line : null,
+      // An outdated thread has no line in the current diff; it keeps the one it was left on.
+      line: typeof thread.line === "number" ? thread.line : typeof thread.originalLine === "number" ? thread.originalLine : null,
       side: thread.diffSide === "LEFT" ? "LEFT" : "RIGHT",
+      diffHunk: str((nodes(thread.hunk)[0] as Record<string, unknown> | undefined)?.diffHunk) || null,
       comments: nodes(thread.comments).map((commentRaw) => {
         const comment = commentRaw as Record<string, unknown>;
         return {
