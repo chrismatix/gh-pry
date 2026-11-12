@@ -15,9 +15,9 @@ import {
 import { allowedMergeMethods, buildOutline, checkFailed, checksArePending, logLine, parseRunLog, type Check, type PrDetails, type StackInfo } from "./model.ts";
 import { activeThread, currentStackIndex, getState, moveSelection, openPager, setState, tabs, toast, updatePager } from "./store.ts";
 
-export async function load(cwd: string, numberArg: number | null): Promise<void> {
+export async function load(cwd: string, numberArg: number | null, repoArg: string | null = null): Promise<void> {
   setState({ phase: "loading", cwd, number: numberArg });
-  const repo = await resolveRepo(cwd);
+  const repo = repoArg ?? await resolveRepo(cwd);
   if (!repo) {
     setState({ phase: "error", message: "not a GitHub repo, or gh could not resolve it" });
     return;

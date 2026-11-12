@@ -6,6 +6,7 @@ Pry open one GitHub pull request in the terminal. Conversation, review threads a
 gh extension install chrismatix/gh-pry
 gh pry          # the current branch's PR
 gh pry 123      # PR #123 in this repo
+gh pry -R owner/repo 123   # PR #123 in another repo
 ```
 
 ![Review threads on a stacked PR](docs/review.png)
