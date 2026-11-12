@@ -171,8 +171,13 @@ export function submitReview(event: string, body: string): Promise<void> {
 export function mergeMethods(): { label: string; flag: string }[] {
   const pr = getState().pr;
   if (!pr) return [];
-  const methods = allowedMergeMethods(pr.repoSettings);
-  if (checksArePending(pr)) {
+  const below = !pr.stackPosition || pr.stackPosition.position === 1 ? ""
+    : pr.stackPosition.position === 2 ? " with the PR below" : ` with the ${pr.stackPosition.position - 1} PRs below`;
+  // The queue picks the merge method itself.
+  if (pr.mergeQueueEnabled) return [{ label: `Add to merge queue${below}`, flag: "--queue" }];
+  const methods = allowedMergeMethods(pr.repoSettings).map((method) => ({ ...method, label: method.label + below }));
+  // gh stack merge has no auto-merge.
+  if (checksArePending(pr) && !pr.stackPosition) {
     return [{ label: "Auto-merge when green", flag: "--auto" }, ...methods];
   }
   return methods;
@@ -182,13 +187,14 @@ export function merge(flag: string): Promise<void> {
   return withBusy(async () => {
     const { cwd, repo, number, pr } = getState();
     if (!repo || number === null || !pr) return;
-    const auto = flag === "--auto";
-    const method = auto ? "--squash" : flag;
-    const args = ["pr", "merge", String(number), "-R", repo, method];
-    if (auto) args.push("--auto");
+    // A stacked PR can only merge together with the PRs below it, and only gh stack does that atomically.
+    const args = pr.stackPosition ? ["stack", "merge", String(number), "--yes"] : ["pr", "merge", String(number)];
+    if (flag === "--auto") args.push("--squash", "--auto");
+    else if (flag !== "--queue") args.push(flag);
+    const what = pr.stackPosition ? `the stack up to #${number}` : `PR #${number}`;
     try {
-      await mustRun("gh", args, { cwd, timeoutMs: 120000 });
-      toast(auto ? "auto-merge enabled" : `merged PR #${number}`);
+      await mustRun("gh", args, { cwd, env: { ...process.env, GH_REPO: repo }, timeoutMs: 120000 });
+      toast(flag === "--auto" ? "auto-merge enabled" : flag === "--queue" ? `added ${what} to the merge queue` : `merged ${what}`);
       await refresh();
     } catch (error) {
       toast(`merge failed: ${firstLine(error)}`, "error");

@@ -67,6 +67,10 @@ export type PrDetails = {
   mergeable: string;
   mergeStateStatus: string | null;
   autoMergeMethod: string | null;
+  isInMergeQueue: boolean;
+  mergeQueueEnabled: boolean;
+  /** Set when the PR is in a GitHub stack; merging it also merges every PR below. */
+  stackPosition: { position: number; size: number } | null;
   labels: string[];
   assignees: string[];
   reviewRequests: string[];
@@ -216,6 +220,7 @@ export function parsePrDetails(pullRequest: Record<string, unknown>, repository:
   }
 
   const autoMerge = pullRequest.autoMergeRequest as { mergeMethod?: unknown } | null;
+  const stackEntry = pullRequest.stackEntry as { position?: unknown; stack?: { size?: unknown } } | null;
   return {
     number: typeof pullRequest.number === "number" ? pullRequest.number : 0,
     title: str(pullRequest.title),
@@ -229,6 +234,11 @@ export function parsePrDetails(pullRequest: Record<string, unknown>, repository:
     mergeable: str(pullRequest.mergeable, "UNKNOWN"),
     mergeStateStatus: typeof pullRequest.mergeStateStatus === "string" ? pullRequest.mergeStateStatus : null,
     autoMergeMethod: typeof autoMerge?.mergeMethod === "string" ? autoMerge.mergeMethod : null,
+    isInMergeQueue: pullRequest.isInMergeQueue === true,
+    mergeQueueEnabled: pullRequest.isMergeQueueEnabled === true,
+    stackPosition: stackEntry && typeof stackEntry.position === "number"
+      ? { position: stackEntry.position, size: typeof stackEntry.stack?.size === "number" ? stackEntry.stack.size : stackEntry.position }
+      : null,
     labels: nodes(pullRequest.labels).map((node) => str((node as { name?: unknown }).name)).filter(Boolean),
     assignees: nodes(pullRequest.assignees).map((node) => login(node)),
     reviewRequests: nodes(pullRequest.reviewRequests).map((node) => {

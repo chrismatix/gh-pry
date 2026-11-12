@@ -93,6 +93,7 @@ function Header({ state }: { state: State }) {
         {mergeState ? <Text color="gray">  ·  <Text color={mergeState.color}>{mergeState.text}</Text></Text> : null}
         {unresolved > 0 ? <Text color="gray">  ·  <Text color="yellow">{unresolved} unresolved</Text></Text> : null}
         {pr.autoMergeMethod ? <Text color="gray">  ·  auto-merge on</Text> : null}
+        {pr.isInMergeQueue ? <Text color="gray">  ·  <Text color="magenta">in merge queue</Text></Text> : null}
         {stackPosition ? <Text color="magenta">  ·  {stackPosition}</Text> : null}
       </Text>
     </Box>
@@ -498,7 +499,7 @@ function OverlayView({ overlay }: { overlay: Overlay }) {
   }
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1}>
-      <Text color="cyan">Merge method (enter merges now, esc cancels)</Text>
+      <Text color="cyan">Merge (enter confirms, esc cancels)</Text>
       <SelectInput
         items={overlay.methods.map((method) => ({ label: method.label, value: method.flag }))}
         onSelect={(item) => {

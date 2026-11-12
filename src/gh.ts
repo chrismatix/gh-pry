@@ -15,10 +15,10 @@ import {
 export function run(
   command: string,
   args: string[],
-  options: { cwd?: string; input?: string; timeoutMs?: number } = {},
+  options: { cwd?: string; input?: string; timeoutMs?: number; env?: NodeJS.ProcessEnv } = {},
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd: options.cwd });
+    const child = spawn(command, args, { cwd: options.cwd, env: options.env });
     let stdout = "";
     let stderr = "";
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -40,7 +40,7 @@ export function run(
   });
 }
 
-export async function mustRun(command: string, args: string[], options: { cwd?: string; input?: string; timeoutMs?: number } = {}): Promise<string> {
+export async function mustRun(command: string, args: string[], options: Parameters<typeof run>[2] = {}): Promise<string> {
   const result = await run(command, args, options);
   if (result.code !== 0) {
     throw new Error((result.stderr || result.stdout).trim() || `${command} exited ${result.code}`);
@@ -76,6 +76,8 @@ fragment prDetail on PullRequest {
       reviewDecision mergeable mergeStateStatus
       author { login }
       autoMergeRequest { mergeMethod }
+      isInMergeQueue isMergeQueueEnabled
+      stackEntry { position stack { size } }
       labels(first: 20) { nodes { name } }
       assignees(first: 10) { nodes { login } }
       reviewRequests(first: 10) { nodes { requestedReviewer { ... on User { login } ... on Team { name } } } }
