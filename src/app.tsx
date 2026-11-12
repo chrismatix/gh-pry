@@ -5,6 +5,7 @@ import TextInput from "ink-text-input";
 import { useState } from "react";
 import * as actions from "./actions.ts";
 import { requestExit } from "./control.ts";
+import { hostDiffFd, sendDiffToHost } from "./diff.ts";
 import {
   checkFailed,
   formatCheckState,
@@ -543,7 +544,10 @@ export function App() {
     if (input === "g") return moveSelection("first");
     if (input === "G") return moveSelection("last");
     if (input === "R") { void actions.refresh(); return; }
-    if (input === "d") { requestExit("diff"); exit(); return; }
+    if (input === "d") {
+      if (hostDiffFd !== null) { void sendDiffToHost(hostDiffFd); return; }
+      requestExit("diff"); exit(); return;
+    }
 
     if (input === "a") { setState({ overlay: { kind: "review-type" } }); return; }
     if (input === "m") {
