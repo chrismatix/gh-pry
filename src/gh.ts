@@ -7,6 +7,7 @@ import {
   parseGhStackView,
   parseOpenPrs,
   parsePrDetails,
+  type JobStep,
   type OpenPrSummary,
   type PrDetails,
   type StackInfo,
@@ -83,7 +84,7 @@ fragment prDetail on PullRequest {
       reviewRequests(first: 10) { nodes { requestedReviewer { ... on User { login } ... on Team { name } } } }
       reviewThreads(first: 100) {
         nodes {
-          id isResolved isOutdated path line originalLine diffSide
+          id isResolved resolvedBy { login } isOutdated path line originalLine diffSide
           hunk: comments(first: 1) { nodes { diffHunk } }
           comments(first: 50) { nodes { databaseId author { login } body createdAt } }
         }
@@ -276,6 +277,17 @@ export async function setThreadResolved(cwd: string, threadId: string, resolved:
 
 export async function fetchJobLog(cwd: string, repo: string, jobId: number, failedOnly: boolean): Promise<string> {
   return mustRun("gh", ["run", "view", "--job", String(jobId), failedOnly ? "--log-failed" : "--log", "-R", repo], { cwd, timeoutMs: 120000 });
+}
+
+export async function fetchJobSteps(cwd: string, repo: string, jobId: number): Promise<JobStep[]> {
+  const raw = JSON.parse(await mustRun("gh", ["api", `repos/${repo}/actions/jobs/${jobId}`, "--jq", ".steps"], { cwd, timeoutMs: 15000 })) as Record<string, unknown>[];
+  return (raw ?? []).map((step) => ({
+    name: String(step.name ?? ""),
+    status: String(step.status ?? "").toUpperCase(),
+    conclusion: typeof step.conclusion === "string" ? step.conclusion.toUpperCase() : null,
+    startedAt: typeof step.started_at === "string" ? step.started_at : null,
+    completedAt: typeof step.completed_at === "string" ? step.completed_at : null,
+  }));
 }
 
 export async function rerunFailed(cwd: string, repo: string, runId: number): Promise<void> {

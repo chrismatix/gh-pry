@@ -25,8 +25,8 @@ function samplePr(): PrDetails {
     assignees: [],
     reviewRequests: ["alice"],
     threads: [
-      { id: "T1", isResolved: false, isOutdated: false, path: "src/x.ts", line: 4, side: "RIGHT", diffHunk: null, comments: [{ databaseId: 1, author: "alice", body: "clamp negatives?", createdAt: "2026-01-01" }, { databaseId: 3, author: "chris", body: "will do", createdAt: "2026-01-02" }] },
-      { id: "T2", isResolved: true, isOutdated: false, path: "README.md", line: 2, side: "RIGHT", diffHunk: null, comments: [{ databaseId: 2, author: "bob", body: "nit", createdAt: "2026-01-02" }] },
+      { id: "T1", isResolved: false, resolvedBy: null, isOutdated: false, path: "src/x.ts", line: 4, side: "RIGHT", diffHunk: null, comments: [{ databaseId: 1, author: "alice", body: "clamp negatives?", createdAt: "2026-01-01" }, { databaseId: 3, author: "chris", body: "will do", createdAt: "2026-01-02" }] },
+      { id: "T2", isResolved: true, resolvedBy: null, isOutdated: false, path: "README.md", line: 2, side: "RIGHT", diffHunk: null, comments: [{ databaseId: 2, author: "bob", body: "nit", createdAt: "2026-01-02" }] },
     ],
     checks: [
       { name: "test", kind: "check-run", status: "COMPLETED", conclusion: "SUCCESS", startedAt: "2026-01-01T00:00:00Z", completedAt: "2026-01-01T00:01:05Z", runId: 42, jobId: 420, workflow: "CI" },
@@ -64,8 +64,8 @@ describe("App", () => {
     expect(frame).toContain("changes requested");
     expect(frame).toContain("1 unresolved");
     expect(frame).toContain("Conversation 2");
-    expect(frame).toContain("› @chris description");
-    expect(frame).toContain("@bob commented looks good");
+    expect(frame).toMatch(/› +@chris +description +Adds a helper/);
+    expect(frame).toMatch(/@bob +commented +looks good/);
     expect(frame).toContain("Second paragraph.");
   });
 
@@ -73,7 +73,7 @@ describe("App", () => {
     ready({ tab: "threads" });
     const frame = frameOf();
     expect(frame).toContain("src/x.ts:4");
-    expect(frame).toContain("+1 reply");
+    expect(frame).toContain("1 reply, last @chris");
     expect(frame).not.toContain("README.md:2");
     expect(frame).toContain("will do");
   });
@@ -91,7 +91,7 @@ describe("App", () => {
     ready({ pr: { ...samplePr(), timeline } });
     moveSelection("last");
     const frame = frameOf();
-    expect(frame).toContain("› @bob commented comment 39");
+    expect(frame).toMatch(/› 01-03 +@bob +commented +comment 39/);
     expect(frame).not.toContain("comment 0 ");
     expect(getState().scroll.conversation).toBeGreaterThan(0);
   });
@@ -99,14 +99,14 @@ describe("App", () => {
   test("the selection marker keeps its two columns when a row overflows", () => {
     const long = "x".repeat(400);
     const threads = [
-      { id: "A", isResolved: false, isOutdated: false, path: "src/a.ts", line: 1, side: "RIGHT" as const, diffHunk: null, comments: [{ databaseId: 1, author: "alice", body: long, createdAt: "2026-01-01" }] },
-      { id: "B", isResolved: false, isOutdated: false, path: "src/b.ts", line: 2, side: "RIGHT" as const, diffHunk: null, comments: [{ databaseId: 2, author: "bob", body: long, createdAt: "2026-01-01" }] },
+      { id: "A", isResolved: false, resolvedBy: null, isOutdated: false, path: "src/a.ts", line: 1, side: "RIGHT" as const, diffHunk: null, comments: [{ databaseId: 1, author: "alice", body: long, createdAt: "2026-01-01" }] },
+      { id: "B", isResolved: false, resolvedBy: null, isOutdated: false, path: "src/b.ts", line: 2, side: "RIGHT" as const, diffHunk: null, comments: [{ databaseId: 2, author: "bob", body: long, createdAt: "2026-01-01" }] },
     ];
     ready({ tab: "threads", pr: { ...samplePr(), threads } });
     const rows = frameOf().split("\n").filter((line) => !line.includes("│") && (line.includes("src/a.ts") || line.includes("src/b.ts")));
     expect(rows).toHaveLength(2);
-    expect(rows[0].startsWith("› ○ src/a.ts:1")).toBe(true);
-    expect(rows[1].startsWith("  ○ src/b.ts:2")).toBe(true);
+    expect(rows[0]).toMatch(/^› ○ +src\/a\.ts:1/);
+    expect(rows[1]).toMatch(/^  ○ +src\/b\.ts:2/);
   });
 
   test("error phase renders the message", () => {
@@ -129,7 +129,7 @@ function sampleStack(): StackInfo {
 describe("Stack", () => {
   test("the tab is always present and reports loading, absent, or the chain", () => {
     ready({ stackLoading: true });
-    expect(tabs(getState())).toEqual(["conversation", "threads", "checks", "stack"]);
+    expect(tabs(getState())).toEqual(["conversation", "checks", "threads", "stack"]);
     expect(frameOf()).toContain("Stack …");
     ready({ stackLoading: false });
     expect(frameOf()).toContain("Stack —");

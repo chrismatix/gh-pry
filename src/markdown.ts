@@ -13,19 +13,34 @@ export function cleanBody(text: string): string {
     .trim();
 }
 
-/** One line that says what a comment is about, for list rows. */
+// CodeRabbit opens every finding with a line like "**Major** · **Security** · **Quick win**".
+const BADGE = /^\W*(Critical|Major|Minor|Trivial|Nitpick)\b[^\n]*·/i;
+
+const SEVERITY_COLORS: Record<string, string> = { critical: "red", major: "yellow", minor: "blue" };
+
+export function severity(text: string | null): { label: string; color: string } | null {
+  const first = cleanBody(text ?? "").split("\n").find((line) => line.trim());
+  const match = first?.match(BADGE);
+  return match ? { label: match[1].toLowerCase(), color: SEVERITY_COLORS[match[1].toLowerCase()] ?? "gray" } : null;
+}
+
+/** One line that says what a comment is about, for list rows; headings only when nothing else is there. */
 export function summary(text: string | null): string {
+  let heading = "";
   for (const raw of cleanBody(text ?? "").split("\n")) {
-    if (/^\s*(```|\|?\s*:?-{3,})/.test(raw)) continue;
+    if (/^\s*(```|\|?\s*:?-{3,})/.test(raw) || BADGE.test(raw) || /^\s*>\s*\[!\w+\]\s*$/.test(raw)) continue;
     const plain = raw
       .replace(/^\s*(#{1,6}|>|[-*+]|\d+[.)])\s+/, "")
       .replace(/^\[[ xX]\]\s+/, "")
       .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
       .replace(/\*\*|__|`/g, "")
+      .replace(/\\([\\`*_{}[\]()#+\-.!|>])/g, "$1")
       .trim();
-    if (plain) return plain;
+    if (!plain) continue;
+    if (!/^\s*#{1,6}\s/.test(raw)) return plain;
+    heading ||= plain;
   }
-  return "";
+  return heading;
 }
 
 const INLINE = /(`[^`]+`)|(\*\*[^*]+\*\*)|(!?\[[^\]]*\]\([^)\s]+\))|(https?:\/\/[^\s)]+)/g;
@@ -109,10 +124,13 @@ export function renderMarkdown(body: string, max: number, gutter: LogSegment[] =
 
     const heading = raw.match(/^#{1,6}\s+(.*)/);
     const quote = raw.match(/^\s*>\s?(.*)/);
+    const alert = quote?.[1].match(/^\[!(\w+)\]\s*$/);
     const item = raw.match(/^(\s*)([-*+]|\d+[.)])\s+(?:\[([ xX])\]\s+)?(.*)/);
     if (heading) {
       blank();
       lines.push(...wrap(inline(heading[1], { bold: true, color: "cyan" }), room, gutter, gutter));
+    } else if (alert) {
+      lines.push(toLine([...gutter, { text: "▎ ", color: "magenta" }, { text: alert[1].toLowerCase(), color: "magenta", bold: true }]));
     } else if (quote) {
       const bar = [...gutter, { text: "▎ ", dim: true }];
       lines.push(...wrap(inline(quote[1], { dim: true }), room, bar, bar));

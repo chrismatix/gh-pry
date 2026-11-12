@@ -2,11 +2,11 @@
 import { Box, Text, useApp, useInput } from "ink";
 import SelectInput from "ink-select-input";
 import TextInput from "ink-text-input";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import * as actions from "./actions.ts";
 import { requestExit } from "./control.ts";
 import { hostDiffFd, sendDiffToHost } from "./diff.ts";
-import { renderMarkdown, summary } from "./markdown.ts";
+import { renderMarkdown, severity, summary } from "./markdown.ts";
 import {
   checkFailed,
   formatCheckState,
@@ -17,6 +17,7 @@ import {
   sliceSegments,
   summarizeChecks,
   type Check,
+  type JobStep,
   type LogLine,
   type LogSegment,
   type ReviewThread,
@@ -29,6 +30,7 @@ import {
   currentStackIndex,
   cycleTab,
   findInPager,
+  getState,
   hasStack,
   jumpToStep,
   layout,
@@ -123,73 +125,110 @@ function Tabs({ state }: { state: State }) {
   );
 }
 
-function TimelineRow({ item }: { item: TimelineItem }) {
-  const when = <Text color="gray">  {relativeTime(item.createdAt)}</Text>;
+const column = (text: string, width: number) => (text.length >= width ? `${text.slice(0, width - 2)}… ` : text.padEnd(width));
+
+function timelineVerb(item: TimelineItem): { verb: string; color: string; text: string } {
   switch (item.kind) {
-    case "description":
-      return <Text><Text color="cyan">@{item.author}</Text> <Text bold>description</Text> <Text color="gray">{summary(item.body) || "(empty)"}</Text></Text>;
-    case "comment":
-      return <Text><Text color="cyan">@{item.author}</Text> commented <Text color="gray">{summary(item.body)}</Text>{when}</Text>;
+    case "description": return { verb: "description", color: "white", text: summary(item.body) || "(empty)" };
+    case "comment": return { verb: "commented", color: "white", text: summary(item.body) };
     case "review": {
       const { verb, color } = reviewVerb(item.reviewState);
-      return <Text><Text color="cyan">@{item.author}</Text> <Text color={color}>{verb}</Text> <Text color="gray">{summary(item.body)}</Text>{when}</Text>;
+      return { verb: verb === "requested changes" ? "changes" : verb, color, text: summary(item.body) };
     }
-    case "force-push":
-      return <Text><Text color="cyan">@{item.author}</Text> <Text color="red">force-pushed</Text>{when}</Text>;
-    case "commit":
-      return <Text color="gray">◦ {item.author} {summary(item.body)}{when}</Text>;
-    case "merged":
-      return <Text><Text color="cyan">@{item.author}</Text> <Text color="magenta">merged</Text>{when}</Text>;
-    case "review-requested":
-      return <Text color="gray"><Text color="cyan">@{item.author}</Text> requested review from @{item.body}{when}</Text>;
+    case "force-push": return { verb: "force-push", color: "red", text: "" };
+    case "commit": return { verb: "commit", color: "gray", text: summary(item.body) };
+    case "merged": return { verb: "merged", color: "magenta", text: "" };
+    case "review-requested": return { verb: "requested", color: "gray", text: `review from @${item.body}` };
   }
 }
 
-function ThreadRow({ thread }: { thread: ReviewThread }) {
-  const root = thread.comments[0];
-  const replies = thread.comments.length - 1;
-  const slash = thread.path.lastIndexOf("/") + 1;
-  const folders = thread.path.slice(0, slash).split("/").filter(Boolean);
-  const folder = folders.length > 1 ? `…/${folders[folders.length - 1]}/` : thread.path.slice(0, slash);
-  const faded = thread.isResolved || thread.isOutdated;
+function TimelineRow({ item }: { item: TimelineItem }) {
+  const { verb, color, text } = timelineVerb(item);
+  const who = item.kind === "commit" ? `◦ ${item.author}` : `@${item.author}`;
   return (
     <Text>
-      <Text color={thread.isResolved ? "green" : "yellow"}>{thread.isResolved ? "✓" : "○"} </Text>
-      <Text color="gray">{folder}</Text>
-      <Text bold={!faded} color={faded ? "gray" : undefined}>{thread.path.slice(slash)}:{thread.line ?? "?"}</Text>
-      {root ? <Text>  <Text color="cyan">@{root.author}</Text> <Text color={faded ? "gray" : undefined}>{summary(root.body)}</Text></Text> : null}
-      {replies > 0 ? <Text color="gray">  +{replies} {replies === 1 ? "reply" : "replies"}</Text> : null}
-      {thread.isOutdated ? <Text color="gray">  · outdated</Text> : null}
+      <Text color="gray">{column(relativeTime(item.createdAt).replace(" ago", "").replace("just now", "now").replace(/^\d{4}-/, ""), 7)}</Text>
+      <Text color={item.kind === "commit" ? "gray" : "cyan"}>{column(who, 18)}</Text>
+      <Text color={color} bold={item.kind !== "commit"}>{column(verb, 12)}</Text>
+      <Text color={item.kind === "commit" ? "gray" : undefined}>{text}</Text>
     </Text>
   );
 }
 
-/** A review thread read like a chat: where it is, the code it is about, then each comment. */
-function threadLines(thread: ReviewThread, width: number): LogLine[] {
+const styled = (segments: LogSegment[], kind: LogLine["kind"] = "text"): LogLine => ({ text: segments.map((segment) => segment.text).join(""), segments, kind });
+
+function ThreadRow({ thread }: { thread: ReviewThread }) {
+  const root = thread.comments[0];
+  const last = thread.comments[thread.comments.length - 1];
+  const replies = thread.comments.length - 1;
   const slash = thread.path.lastIndexOf("/") + 1;
-  const status: LogSegment = thread.isResolved ? { text: "✓ resolved", color: "green" } : { text: "○ unresolved", color: "yellow" };
-  const header: LogSegment[] = [
-    { text: thread.path.slice(0, slash), color: "gray" },
-    { text: `${thread.path.slice(slash)}:${thread.line ?? "?"}`, color: "cyan", bold: true },
-    { text: "  " }, status,
-    ...(thread.isOutdated ? [{ text: " · outdated", color: "gray" }] : []),
-  ];
-  const lines: LogLine[] = [{ text: header.map((segment) => segment.text).join(""), segments: header, kind: "step" }];
+  const folders = thread.path.slice(0, slash).split("/").filter(Boolean);
+  const folder = folders.length > 1 ? `…/${folders[folders.length - 1]}/` : thread.path.slice(0, slash);
+  const location = `${thread.path.slice(slash)}:${thread.line ?? "?"}`;
+  const tag = severity(root?.body ?? null);
+  if (thread.isResolved) {
+    return (
+      <Text color="gray">
+        <Text color="green" bold>✓ resolved </Text>
+        {folder}{location}  {summary(root?.body ?? null)}
+        {thread.resolvedBy ? `  · by @${thread.resolvedBy}` : ""}
+      </Text>
+    );
+  }
+  return (
+    <Text>
+      <Text color="yellow" bold>○ </Text>
+      <Text color={tag?.color ?? "gray"}>{column(tag?.label ?? "", 9)}</Text>
+      <Text color="gray">{folder}</Text>
+      <Text bold>{location}</Text>
+      <Text>  {summary(root?.body ?? null)}</Text>
+      <Text color="gray">  @{root?.author}{replies > 0 ? ` · ${replies} ${replies === 1 ? "reply" : "replies"}, last @${last.author} ${relativeTime(last.createdAt)}` : ""}</Text>
+      {thread.isOutdated ? <Text color="gray"> · outdated</Text> : null}
+    </Text>
+  );
+}
+
+/** A review thread read like a chat: its status, the code it is about, then each comment. */
+function threadLines(thread: ReviewThread, width: number): LogLine[] {
+  const tag = severity(thread.comments[0]?.body ?? null);
+  const banner: LogSegment[] = thread.isResolved
+    ? [{ text: " ✓ RESOLVED ", color: "black", backgroundColor: "green", bold: true }, { text: thread.resolvedBy ? `  by @${thread.resolvedBy}` : "", color: "green" }]
+    : [{ text: " ○ OPEN ", color: "black", backgroundColor: "yellow", bold: true }, ...(tag ? [{ text: `  ${tag.label}`, color: tag.color, bold: true }] : [])];
+  if (thread.isOutdated) banner.push({ text: "  · outdated", color: "gray" });
+  const lines: LogLine[] = [styled(banner, "step"), styled([{ text: thread.path, color: "cyan" }, { text: `:${thread.line ?? "?"}`, color: "cyan", bold: true }])];
   const hunk = (thread.diffHunk ?? "").split("\n").filter((line) => line && !line.startsWith("@@")).slice(-4);
   for (const code of hunk) {
-    const color = code.startsWith("+") ? "green" : code.startsWith("-") ? "red" : "gray";
-    lines.push({ text: `  ${code}`, segments: [{ text: "▏ ", color: "gray" }, { text: code, color }], kind: "text" });
+    lines.push(styled([{ text: "▏ ", color: "gray" }, { text: code, color: code.startsWith("+") ? "green" : code.startsWith("-") ? "red" : "gray" }]));
   }
   thread.comments.forEach((comment, index) => {
     lines.push(logLine(""));
-    const who: LogSegment[] = [
-      { text: index === 0 ? "" : "↳ ", color: "gray" },
+    lines.push(styled([
+      { text: index === 0 ? "● " : "↳ ", color: index === 0 ? "cyan" : "gray" },
       { text: `@${comment.author}`, color: "cyan", bold: true },
       { text: ` · ${relativeTime(comment.createdAt)}`, color: "gray" },
-    ];
-    lines.push({ text: who.map((segment) => segment.text).join(""), segments: who, kind: "text" });
-    lines.push(...renderMarkdown(comment.body, width, [{ text: "│ ", color: index === 0 ? "cyan" : "gray" }]));
+    ]));
+    // Resolved threads stay readable but recede, so open ones stand out.
+    const body = renderMarkdown(comment.body, width, [{ text: "│ ", color: index === 0 ? "cyan" : "gray" }]);
+    lines.push(...(thread.isResolved ? body.map((line) => ({ ...line, segments: line.segments.map((segment) => ({ ...segment, dim: true })) })) : body));
   });
+  return lines;
+}
+
+function stepLines(detail: { steps: JobStep[]; tail: LogLine[] }): LogLine[] {
+  const finished = detail.steps.filter((step) => step.status === "COMPLETED" && step.conclusion !== "FAILURE");
+  const lines: LogLine[] = [];
+  if (finished.length > 0) lines.push(styled([{ text: "✓ ", color: "green" }, { text: `${finished.length} step${finished.length === 1 ? "" : "s"} done`, color: "gray" }]));
+  for (const step of detail.steps) {
+    if (finished.includes(step)) continue;
+    if (step.status === "IN_PROGRESS") {
+      lines.push(styled([{ text: "● ", color: "yellow" }, { text: step.name, bold: true }, { text: `  running ${formatDuration(step.startedAt, null)}`, color: "yellow" }]));
+    } else if (step.conclusion === "FAILURE") {
+      lines.push(styled([{ text: "✗ ", color: "red" }, { text: step.name, color: "red" }, { text: `  ${formatDuration(step.startedAt, step.completedAt)}`, color: "gray" }]));
+    } else {
+      lines.push(styled([{ text: "○ ", color: "gray" }, { text: step.name, color: "gray" }]));
+    }
+  }
+  if (detail.tail.length > 0) lines.push(logLine(""), logLine("end of the failed log", "dim"), ...detail.tail);
   return lines;
 }
 
@@ -303,7 +342,10 @@ function detailLines(state: State, width: number): LogLine[] {
   return [
     logLine(`${icon} ${check.name}${check.workflow ? ` · ${check.workflow}` : ""}`, "step"),
     logLine(`${status}${check.startedAt ? ` · started ${relativeTime(check.startedAt)}` : ""}${check.startedAt ? ` · ${formatDuration(check.startedAt, check.completedAt)}` : ""}`, checkFailed(check) ? "error" : "text"),
-    logLine(check.jobId !== null ? `enter opens the ${checkFailed(check) ? "failed-step" : "full"} log` : "no workflow log for this check", "dim"),
+    logLine(check.jobId === null ? "no workflow log for this check"
+      : check.status !== "COMPLETED" ? "GitHub publishes the log when the job ends; steps refresh every 5s"
+      : `enter opens the ${checkFailed(check) ? "failed-step" : "full"} log`, "dim"),
+    ...(state.checkDetail && state.checkDetail.jobId === check.jobId ? [logLine(""), ...stepLines(state.checkDetail)] : []),
   ];
 }
 
@@ -322,7 +364,7 @@ function StyledLine({ line }: { line: LogLine }) {
   return (
     <Text wrap="truncate">
       {line.segments.map((piece, offset) => (
-        <Text key={offset} color={piece.color ?? fallback.color} bold={piece.bold ?? fallback.bold} dimColor={piece.dim}>{piece.text}</Text>
+        <Text key={offset} color={piece.color ?? fallback.color} backgroundColor={piece.backgroundColor} bold={piece.bold ?? fallback.bold} dimColor={piece.dim}>{piece.text}</Text>
       ))}
     </Text>
   );
@@ -385,7 +427,7 @@ function PagerView({ pager, state }: { pager: Pager; state: State }) {
           return (
             <Text key={pager.top + index} wrap="truncate">
               {pieces.map((piece, offset) => (
-                <Text key={offset} color={piece.color ?? fallback.color} bold={piece.bold ?? fallback.bold} dimColor={piece.dim}>{piece.text}</Text>
+                <Text key={offset} color={piece.color ?? fallback.color} backgroundColor={piece.backgroundColor} bold={piece.bold ?? fallback.bold} dimColor={piece.dim}>{piece.text}</Text>
               ))}
             </Text>
           );
@@ -515,6 +557,26 @@ export function App() {
   const state = useStore();
   const { exit } = useApp();
 
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const { busy, phase } = getState();
+      if (!busy && phase === "ready") void actions.refresh();
+    }, 20_000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const check = state.tab === "checks" ? state.pr?.checks[state.selection.checks] : undefined;
+  const jobId = check?.jobId ?? null;
+  const running = check !== undefined && check.status !== "COMPLETED";
+  const failed = check !== undefined && checkFailed(check);
+  useEffect(() => {
+    if (jobId === null) return;
+    // Waits a beat so scrolling through the list doesn't fetch every check on the way.
+    const timer = setTimeout(() => void actions.loadCheckDetail(jobId, failed), 250);
+    const poll = running ? setInterval(() => void actions.loadCheckDetail(jobId, false), 5_000) : undefined;
+    return () => { clearTimeout(timer); clearInterval(poll); };
+  }, [jobId, running, failed]);
+
   useInput((input, key) => {
     if (state.pager) {
       const pager = state.pager;
@@ -567,8 +629,8 @@ export function App() {
 
     if (key.tab) return cycleTab(key.shift ? -1 : 1);
     if (input === "1") return setTab("conversation");
-    if (input === "2") return setTab("threads");
-    if (input === "3") return setTab("checks");
+    if (input === "2") return setTab("checks");
+    if (input === "3") return setTab("threads");
     if (input === "4") return setTab("stack");
     if (input === "[" || input === "]") {
       if (stackEntries(state).length < 2) { toast("this PR is not part of a stack", "warning"); return; }

@@ -1,6 +1,7 @@
 import {
   currentBranch,
   fetchJobLog,
+  fetchJobSteps,
   fetchPr,
   fetchStack,
   firstLine,
@@ -68,7 +69,27 @@ export async function refresh(cwd = getState().cwd, repo = getState().repo, numb
     setState({ phase: "ready", message: undefined, repo, number, pr: details, stack: remarkCurrent(getState().stack, number) });
     void loadStack(cwd, repo, details);
   } catch (error) {
-    setState({ phase: "error", message: firstLine(error), repo, number });
+    // A failed background refresh must not take a loaded PR off the screen.
+    if (getState().pr?.number === number) toast(`refresh failed: ${firstLine(error)}`, "warning");
+    else setState({ phase: "error", message: firstLine(error), repo, number });
+  }
+}
+
+/** GitHub serves a job's log only once the job ends, so a running check shows its steps instead. */
+export async function loadCheckDetail(jobId: number, failed: boolean): Promise<void> {
+  const { cwd, repo } = getState();
+  if (!repo) return;
+  try {
+    const [steps, log] = await Promise.all([
+      fetchJobSteps(cwd, repo, jobId),
+      failed ? fetchJobLog(cwd, repo, jobId, true).catch(() => "") : "",
+    ]);
+    const lines = parseRunLog(log);
+    // Runner cleanup follows the failure, so the tail ends at the last error marker.
+    const end = lines.findLastIndex((line) => line.text.includes("##[error]")) + 1 || lines.length;
+    setState({ checkDetail: { jobId, steps, tail: lines.slice(Math.max(end - 12, 0), end) } });
+  } catch {
+    // The preview still shows the check itself.
   }
 }
 

@@ -8,6 +8,7 @@ export type ThreadComment = {
 export type ReviewThread = {
   id: string;
   isResolved: boolean;
+  resolvedBy: string | null;
   isOutdated: boolean;
   path: string;
   line: number | null;
@@ -28,6 +29,8 @@ export type Check = {
   jobId: number | null;
   workflow: string | null;
 };
+
+export type JobStep = { name: string; status: string; conclusion: string | null; startedAt: string | null; completedAt: string | null };
 
 export type TimelineItem = {
   kind: "description" | "comment" | "review" | "force-push" | "commit" | "merged" | "review-requested";
@@ -162,6 +165,7 @@ export function parsePrDetails(pullRequest: Record<string, unknown>, repository:
     return {
       id: str(thread.id),
       isResolved: thread.isResolved === true,
+      resolvedBy: thread.resolvedBy ? login(thread.resolvedBy).replace(/\[bot\]$/, "") : null,
       isOutdated: thread.isOutdated === true,
       path: str(thread.path),
       // An outdated thread has no line in the current diff; it keeps the one it was left on.
@@ -479,7 +483,7 @@ export function formatDuration(startedAt: string | null, completedAt: string | n
   return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
-export type LogSegment = { text: string; color?: string; bold?: boolean; dim?: boolean };
+export type LogSegment = { text: string; color?: string; backgroundColor?: string; bold?: boolean; dim?: boolean };
 export type LogLine = { text: string; segments: LogSegment[]; kind: "text" | "step" | "error" | "dim" };
 export type LogStep = { label: string; line: number; failed: boolean };
 

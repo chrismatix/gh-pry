@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import type { LogLine, LogStep, PrDetails, ReviewThread, StackEntry, StackInfo, TimelineItem } from "./model.ts";
+import type { JobStep, LogLine, LogStep, PrDetails, ReviewThread, StackEntry, StackInfo, TimelineItem } from "./model.ts";
 
 export type Tab = "conversation" | "threads" | "checks" | "stack";
 
@@ -42,6 +42,7 @@ export type State = {
   toast: Toast | null;
   busy: boolean;
   stackLoading: boolean;
+  checkDetail: { jobId: number; steps: JobStep[]; tail: LogLine[] } | null;
   viewport: { columns: number; rows: number };
 };
 
@@ -61,6 +62,7 @@ let state: State = {
   toast: null,
   busy: false,
   stackLoading: false,
+  checkDetail: null,
   viewport: { columns: 100, rows: 30 },
 };
 
@@ -105,7 +107,8 @@ export function conversationItems(current: State): TimelineItem[] {
 
 export function visibleThreads(current: State): ReviewThread[] {
   if (!current.pr) return [];
-  return current.hideResolved ? current.pr.threads.filter((thread) => !thread.isResolved) : current.pr.threads;
+  if (current.hideResolved) return current.pr.threads.filter((thread) => !thread.isResolved);
+  return [...current.pr.threads].sort((a, b) => Number(a.isResolved) - Number(b.isResolved));
 }
 
 export function stackEntries(current: State): StackEntry[] {
@@ -114,7 +117,7 @@ export function stackEntries(current: State): StackEntry[] {
 
 /** Always four tabs: the chain loads in the background, and a tab bar that
  *  changes shape under the user's fingers is worse than one mostly-idle tab. */
-const TABS: Tab[] = ["conversation", "threads", "checks", "stack"];
+const TABS: Tab[] = ["conversation", "checks", "threads", "stack"];
 
 export function tabs(_current: State): Tab[] {
   return TABS;

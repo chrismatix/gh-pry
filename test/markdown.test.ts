@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { renderMarkdown, summary } from "../src/markdown.ts";
+import { renderMarkdown, severity, summary } from "../src/markdown.ts";
 
 const texts = (body: string, width = 40) => renderMarkdown(body, width).map((line) => line.text);
 
@@ -32,5 +32,21 @@ describe("markdown", () => {
   test("every line carries the gutter", () => {
     const lines = renderMarkdown("one\n\ntwo", 80, [{ text: "│ " }]);
     expect(lines.map((line) => line.text)).toEqual(["│ one", "│ ", "│ two"]);
+  });
+});
+
+describe("CodeRabbit findings", () => {
+  const body = "<!-- x -->\n\n**<img alt=\"\"> Major** · **Security** · **Quick win**\n\n**Setting `valid_to` does not roll back.**";
+
+  test("severity reads the badge line", () => {
+    expect(severity(body)).toEqual({ label: "major", color: "yellow" });
+    expect(severity("plain comment")).toBeNull();
+  });
+
+  test("summary skips the badge, alert markers and headings", () => {
+    expect(summary(body)).toBe("Setting valid_to does not roll back.");
+    expect(summary("> [!IMPORTANT]\n> Review skipped")).toBe("Review skipped");
+    expect(summary("## What\nAdds a helper.")).toBe("Adds a helper.");
+    expect(summary("## Only a heading")).toBe("Only a heading");
   });
 });
